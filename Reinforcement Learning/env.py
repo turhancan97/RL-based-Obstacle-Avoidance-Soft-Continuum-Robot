@@ -23,14 +23,14 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
     """
     ### Description
     
-    Robots with a continuous “backbone” on the other hand, have a wide range of maneuverability and can have a huge number 
+    Robots with a continuous "backbone" on the other hand, have a wide range of maneuverability and can have a huge number 
     of degrees of freedom. Unlike traditional robots, where motion happens in discrete points, 
     such as joints, continuum style robots generate motion by bending the robot over a specific segment.
 
     Our system's aim is to take the three segment continuum robot from a random starting point to a random target by using 
     the forward kinematics in (19) and velocity kinematics formulas in (24) in the article below.
 
-    * -> Hannan, M. W. & Walker, I. D. Kinematics and the implementation of an elephant’s trunk manipulator and other 
+    * -> Hannan, M. W. & Walker, I. D. Kinematics and the implementation of an elephant's trunk manipulator and other 
     continuum style robots. J. Robot. Syst. 20, 45–63 (2003).
    
     -  `x-y`: cartesian coordinates of the robot's tip point in meters.
@@ -99,7 +99,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         self.overshoot1 = 0
         self.pi = math.pi
         self.position_dic = {'Section1': {'x':[],'y':[]}, 'Section2': {'x':[],'y':[]}, 'Section3': {'x':[],'y':[]},
-                             'Obs': {'x':[],'y':[]}} # to store the position of the robot in each step
+                             'Obs': {'x':[],'y':[]}, 'Obs2': {'x':[],'y':[]}} # to store the position of the robot in each step
         # Define the observation and action space from OpenAI Gym
         high = np.array([0.2, 0.3, 0.16, 0.3], dtype=np.float32) # [0.16, 0.3, 0.16, 0.3]
         low = np.array([-0.3, -0.15, -0.27, -0.11], dtype=np.float32) # [-0.27, -0.11, -0.27, -0.11]
@@ -111,7 +111,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
 
     def step(self, u, reward_function:str = 'step_minus_euclidean_square'):
 
-        x,y,goal_x,goal_y, obstacle_x, obstacle_y = self.state # Get the current state of the robot
+        x,y,goal_x,goal_y, obstacle_x, obstacle_y, obstacle2_x, obstacle2_y = self.state # Get the current state of the robot
 
         # global variables to be used in the reward function
         global new_x 
@@ -176,16 +176,27 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         # self.previous_error = self.error
 
         elif reward_function == 'step_minus_weighted_euclidean':
+            self.error = math.sqrt(((goal_x-x)**2)+((goal_y-y)**2))
+            obstacle_dist = math.sqrt(((obstacle_x-x)**2) + ((obstacle_y-y)**2))
+            obstacle2_dist = math.sqrt(((obstacle2_x-x)**2) + ((obstacle2_y-y)**2))
             
-            self.error = math.sqrt(((goal_x-x)**2)+((goal_y-y)**2)) # Calculate the error squared
-            self.costs = 0.7 * self.error # Set the cost (reward) to the error squared
-            if self.error <= 0.01: # give extra reward if the robot is close to the goal
-                self.costs -= 0.07
-            # penalize if it get closer to the obstacle by add extra cost
-            if math.sqrt(((obstacle_x-x)**2)+((obstacle_y-y)**2)) <= 0.01:
-                self.costs += 0.07
-            elif math.sqrt(((obstacle_x-x)**2)+((obstacle_y-y)**2)) <= 0.005:
-                self.costs += 0.1
+            # Base reward from goal distance
+            self.costs = self.error
+            
+            # Goal proximity bonus (smoother gradient)
+            if self.error <= 0.02:
+                self.costs -= (0.02 - self.error) * 5 # Increasing reward as gets closer
+                
+            # Obstacle avoidance penalty (smoother gradient)
+            if obstacle_dist <= 0.025:
+                obstacle_penalty = (1 - (obstacle_dist / 0.025)) * 2 # Increases as gets closer
+                self.costs += obstacle_penalty
+            
+            # Second obstacle avoidance penalty
+            if obstacle2_dist <= 0.025:
+                obstacle2_penalty = (1 - (obstacle2_dist / 0.025)) * 2 # Increases as gets closer
+                self.costs += obstacle2_penalty
+
             # Just to show if the robot is moving along the goal or not
             if self.error < self.previous_error:
                 #self.costs -= 1
@@ -358,7 +369,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
             
         
         # States of the robot in numpy array
-        self.state = np.array([new_x,new_y,new_goal_x,new_goal_y, obstacle_x, obstacle_y])
+        self.state = np.array([new_x,new_y,new_goal_x,new_goal_y, obstacle_x, obstacle_y, obstacle2_x, obstacle2_y])
         
         if reward_function == 'step_minus_euclidean_square' or reward_function == 'step_minus_weighted_euclidean':
             return self._get_obs(), -self.costs, done, {} # Return the observation, the reward (-costs) and the done flag
@@ -379,9 +390,9 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
        
        # Random target point
        # (Random curvatures are given so that forward kinematics equation will generate random target position)
-       self.target_k1 = 6.2 # np.random.uniform(low=-4, high=16)
-       self.target_k2 = 6.2 # np.random.uniform(low=-4, high=16)
-       self.target_k3 = 6.2 # np.random.uniform(low=-4, high=16)
+       self.target_k1 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
+       self.target_k2 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
+       self.target_k3 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
        
        T3_target = three_section_planar_robot(self.target_k1,self.target_k2,self.target_k3, self.l) # Generate the target point for the robot
        goal_x,goal_y = np.array([T3_target[0,3],T3_target[1,3]]) # Extract the x and y coordinates of the target
@@ -390,14 +401,18 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
        obstacle_x = -0.16 # np.random.uniform(low=-0.2, high=-0.15)
        obstacle_y = 0.22 # np.random.uniform(low=-0.15, high=0.05)
 
-       self.state = x,y,goal_x,goal_y,obstacle_x, obstacle_y # Update the state of the robot
+       # Set second static obstacle
+       obstacle2_x = -0.22
+       obstacle2_y = 0.02
+
+       self.state = x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y # Update the state of the robot
        
        self.last_u = None
        return self._get_obs()
     
     def _get_obs(self):
-        x,y,goal_x,goal_y,obstacle_x,obstacle_y = self.state
-        return np.array([x,y,goal_x,goal_y,obstacle_x,obstacle_y],dtype=np.float32)
+        x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y = self.state
+        return np.array([x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y],dtype=np.float32)
     
     def render_calculate(self):
         # current state
@@ -420,6 +435,8 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         self.position_dic['Section3']['y'].append(T3_cc[:,13])
         self.position_dic['Obs']['x'].append(self.state[4])
         self.position_dic['Obs']['y'].append(self.state[5])
+        self.position_dic['Obs2']['x'].append(self.state[6])  # Static obstacle
+        self.position_dic['Obs2']['y'].append(self.state[7])   # Static obstacle
         
 
     def render_init(self):
@@ -440,6 +457,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         self.ax.plot(self.position_dic['Section3']['x'][i],self.position_dic['Section3']['y'][i],'g',linewidth=3)
         self.ax.scatter(self.position_dic['Section3']['x'][i][-1],self.position_dic['Section3']['y'][i][-1],linewidths=5,color = 'black')
         self.ax.scatter(self.position_dic['Obs']['x'][i],self.position_dic['Obs']['y'][i],linewidths=5,color = 'red')
+        self.ax.scatter(self.position_dic['Obs2']['x'][i],self.position_dic['Obs2']['y'][i],linewidths=5,color = 'red')
 
         # Plot the target point and trajectory of the robot
         self.ax.scatter(self.state[2],self.state[3],100, marker= "x",linewidths=2, color = 'red')
@@ -502,7 +520,8 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         
         # Plot the target point and trajectory of the robot
         plt.scatter(self.state[2],self.state[3],100, marker= "x",linewidths=4, color = 'red',label='Target Point')
-        plt.scatter(self.state[4],self.state[5],100, marker= "x",linewidths=4, color = 'black',label='Obstacle Point')
+        plt.scatter(self.state[4],self.state[5],100, marker= "x",linewidths=4, color = 'black',label='Obstacle Point 1')
+        plt.scatter(self.state[6],self.state[7], 100, marker= "x",linewidths=4, color = 'black',label='Obstacle Point 2')
         plt.scatter(x_pos,y_pos,25,linewidths=0.03,color = 'blue',alpha=0.2)
         plt.xlim([-0.4, 0.4])
         plt.ylim([-0.4, 0.4])
