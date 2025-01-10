@@ -11,7 +11,7 @@ print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 from tensorflow.keras import layers
 import pickle
 import numpy as np
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import time
 import math
 # from forward_velocity_kinematics import three_section_planar_robot
@@ -29,7 +29,7 @@ with open(file_path, "r") as file:
 
 env = continuumEnv()
 
-num_states = env.observation_space.shape[0] * 2 # multiply by 2 because we have also goal state
+num_states = env.observation_space.shape[0] * 4 # multiply by 2 because we have also goal state
 print("Size of State Space ->  {}".format(num_states))
 num_actions = env.action_space.shape[0]
 print("Size of Action Space ->  {}".format(num_actions))
@@ -184,13 +184,13 @@ def get_actor():
     inputs = layers.Input(shape=(num_states,))
     # inputs = layers.Dropout(0.2)(inputs) # delete
     # inputs = layers.BatchNormalization()(inputs)  # delete
-    out = layers.Dense(512, activation="relu")(inputs) # 512
+    out = layers.Dense(256, activation="relu")(inputs) # 512
+    # out = layers.BatchNormalization()(out)  # delete
+    out = layers.Dense(256, activation="relu")(out) # 512
     # out = layers.BatchNormalization()(out)  # delete
     out = layers.Dense(256, activation="relu")(out) # 256
     # out = layers.BatchNormalization()(out)  # delete
-    out = layers.Dense(128, activation="relu")(out) # 256
-    # out = layers.BatchNormalization()(out)  # delete
-    # out = layers.Dense(512, activation="relu")(out) # 512
+    out = layers.Dense(128, activation="relu")(out) # 128
     # out = layers.BatchNormalization()(out) # delete
     # out = layers.Dense(256, activation="relu")(out) # delete
     
@@ -206,20 +206,20 @@ def get_actor():
 
 def get_critic():
     # State as input
-    state_input = layers.Input(shape=(num_states))
+    state_input = layers.Input(shape=(num_states,))
     # state_input = layers.Dropout(0.2)(state_input) # delete
     # state_input = layers.BatchNormalization()(state_input) # delete
-    state_out = layers.Dense(64, activation="relu")(state_input) # 32
+    state_out = layers.Dense(256, activation="relu")(state_input) # 128
     # state_out = layers.BatchNormalization()(state_out) # delete
-    state_out = layers.Dense(32, activation="relu")(state_out) # 64
+    state_out = layers.Dense(256, activation="relu")(state_out) # 256
     # state_out = layers.BatchNormalization()(state_out) # delete
-    state_out = layers.Dense(32, activation="relu")(state_out) # 128
+    # state_out = layers.Dense(32, activation="relu")(state_out) # 128
 
     # Action as input
-    action_input = layers.Input(shape=(num_actions))
+    action_input = layers.Input(shape=(num_actions,))
     # action_input = layers.Dropout(0.2)(action_input) # delete
     # action_input = layers.BatchNormalization()(action_input) # delete
-    action_out = layers.Dense(32, activation="relu")(action_input) # 128
+    action_out = layers.Dense(256, activation="relu")(action_input) # 256
     # action_out = layers.BatchNormalization()(action_out) # delete
     # action_out = layers.Dense(64, activation="relu")(action_out) # 64
     # action_out = layers.BatchNormalization()(action_out) # delete
@@ -230,7 +230,7 @@ def get_critic():
 
     out = layers.Dense(256, activation="relu")(concat) # 256
     # out = layers.BatchNormalization()(out) # delete
-    out = layers.Dense(256, activation="relu")(out) # 256
+    out = layers.Dense(128, activation="relu")(out) # 256
     # out = layers.BatchNormalization()(out)  # delete
     # out = layers.Dense(128, activation="relu")(out) # 128
     # out = layers.BatchNormalization()(out) # delete
@@ -280,13 +280,13 @@ actor_lr = 1e-4         # learning rate of the actor
 critic_optimizer = tf.keras.optimizers.Adam(critic_lr)
 actor_optimizer = tf.keras.optimizers.Adam(actor_lr)
 
-total_episodes = 400
+total_episodes = 5000
 # Discount factor for future rewards
 gamma = 0.99            # discount factor
 # Used to update target networks
-tau = 5e-3              # for soft update of target parameters
+tau = 1e-3              # for soft update of target parameters
 
-buffer = Buffer(int(5e5), 128) # Buffer(50000, 64)
+buffer = Buffer(int(1e6), 256) # Buffer(50000, 64)
 
 # %% Train or Evaluate
 # To store reward history of each episode
@@ -299,7 +299,7 @@ avg_reward = 0
 TRAIN = False
 
 if TRAIN:
-    std_dev = 0.2
+    std_dev = 0.3
     ou_noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(std_dev) * np.ones(num_actions))
     
     for ep in range(total_episodes):
@@ -367,30 +367,30 @@ if TRAIN:
         ep_reward_list.append(episodic_reward)
     
         # Mean of 250 episodes
-        avg_reward = np.mean(ep_reward_list[-100:])
+        avg_reward = np.mean(ep_reward_list[-250:])
         if ep % 1 == 0:
             print("Episode * {} * Avg Reward is ==> {}".format(ep, avg_reward))
-            time.sleep(0.5)
+            # time.sleep(0.5)
         avg_reward_list.append(avg_reward)
     
     print(f'{counter} times robot reached the target point in total {total_episodes} episodes')
-    # Plotting graph
-    # Episodes versus Avg. Rewards
-    plt.subplot(1, 2, 1)
-    plt.plot(np.arange(1, len(avg_reward_list)+1), avg_reward_list)
-    plt.xlabel("Episode")
-    plt.ylabel("Avg. Epsiodic Reward")
+    # # Plotting graph
+    # # Episodes versus Avg. Rewards
+    # plt.subplot(1, 2, 1)
+    # plt.plot(np.arange(1, len(avg_reward_list)+1), avg_reward_list)
+    # plt.xlabel("Episode")
+    # plt.ylabel("Avg. Epsiodic Reward")
 
     with open('avg_reward_list.pickle', 'wb') as f:
         # Pickle the 'data' dictionary using the highest protocol available.
         pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
     
-    # Episodes versus Rewards
-    plt.subplot(1, 2, 2)
-    plt.plot(np.arange(1, len(ep_reward_list)+1), ep_reward_list)
-    plt.xlabel('Episode')
-    plt.ylabel('Average Reward')
-    plt.show()
+    # # Episodes versus Rewards
+    # plt.subplot(1, 2, 2)
+    # plt.plot(np.arange(1, len(ep_reward_list)+1), ep_reward_list)
+    # plt.xlabel('Episode')
+    # plt.ylabel('Average Reward')
+    # plt.show()
 
     with open('ep_reward_list.pickle', 'wb') as f:
         # Pickle the 'data' dictionary using the highest protocol available.
