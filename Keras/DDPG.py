@@ -29,7 +29,7 @@ with open(file_path, "r") as file:
 
 env = continuumEnv()
 
-num_states = env.observation_space.shape[0] * 4 # multiply by 2 because we have also goal state
+num_states = env.obs_size # 4 + (len(self.obstacles) * 2)
 print("Size of State Space ->  {}".format(num_states))
 num_actions = env.action_space.shape[0]
 print("Size of Action Space ->  {}".format(num_actions))
@@ -296,7 +296,7 @@ avg_reward_list = []
 counter = 0
 avg_reward = 0
 
-TRAIN = False
+TRAIN = True
 
 if TRAIN:
     std_dev = 0.3
@@ -372,6 +372,13 @@ if TRAIN:
             print("Episode * {} * Avg Reward is ==> {}".format(ep, avg_reward))
             # time.sleep(0.5)
         avg_reward_list.append(avg_reward)
+
+        if ep % 1000 == 0:
+            # Save Weights
+            actor_model.save_weights(f"experiment/continuum_actor_{env.num_obstacles}.h5")
+            critic_model.save_weights(f"experiment/continuum_critic_{env.num_obstacles}.h5")
+            target_actor.save_weights(f"experiment/continuum_target_actor_{env.num_obstacles}.h5")
+            target_critic.save_weights(f"experiment/continuum_target_critic_{env.num_obstacles}.h5")
     
     print(f'{counter} times robot reached the target point in total {total_episodes} episodes')
     # # Plotting graph
@@ -396,11 +403,6 @@ if TRAIN:
         # Pickle the 'data' dictionary using the highest protocol available.
         pickle.dump(ep_reward_list, f, pickle.HIGHEST_PROTOCOL)
     
-    # Save Weights
-    actor_model.save_weights("experiment/continuum_actor.h5")
-    critic_model.save_weights("experiment/continuum_critic.h5")
-    target_actor.save_weights("experiment/continuum_target_actor.h5")
-    target_critic.save_weights("experiment/continuum_target_critic.h5")
     end_time = time.time() - start_time
     print('Total Overshoot 0: ', env.overshoot0)
     print('Total Overshoot 1: ', env.overshoot1)

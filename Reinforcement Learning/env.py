@@ -69,7 +69,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
     * Furter more details can be found in comments in the code.
     """
     
-    def __init__(self): # TODO: Add some of the reqired attributes as optional parameter such as __init__(self, delta_kappa = 0.001)
+    def __init__(self, obstacles=None): # TODO: Add some of the reqired attributes as optional parameter such as __init__(self, delta_kappa = 0.001)
         # self.delta_kappa = delta_kappa
 
         self.delta_kappa = 0.001     # necessary for the numerical differentiation
@@ -92,27 +92,51 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         self.dt =  5e-2             # sample sizes
         self.J = np.zeros((2,3))    # initializes the Jacobian matrix  
         self.error = 0              # initializes the error
-        self.previous_error = 0     # initializes the previous error
         self.start_kappa = [0,0,0]  # initializes the start kappas for the three segments
         self.time = 0               # to count the time of the simulation
         self.overshoot0 = 0
         self.overshoot1 = 0
         self.pi = math.pi
-        self.position_dic = {'Section1': {'x':[],'y':[]}, 'Section2': {'x':[],'y':[]}, 'Section3': {'x':[],'y':[]},
-                             'Obs': {'x':[],'y':[]}, 'Obs2': {'x':[],'y':[]}} # to store the position of the robot in each step
+        # Default obstacles if none provided
+        if obstacles is None:
+            obstacles = [
+                {'x': -0.16, 'y': 0.22},  # Default obstacle 1
+                {'x': -0.22, 'y': 0.02},   # Default obstacle 2
+                {'x': -0.16, 'y': 0.08},  # Default obstacle 3
+            ]
+        self.obstacles = obstacles
+        self.position_dic = {
+            'Section1': {'x': [], 'y': []},
+            'Section2': {'x': [], 'y': []},
+            'Section3': {'x': [], 'y': []}
+        } # to store the position of the robot in each step
+        # Add obstacle entries dynamically
+        for i, _ in enumerate(self.obstacles):
+            self.position_dic[f'Obs{i+1}'] = {'x': [], 'y': []}
+        
+        # Calculate observation space size based on number of obstacles
+        # 4 values for robot and goal (x,y each) + 2 values per obstacle (x,y)
+        self.obs_size = 4 + (len(self.obstacles) * 2)
+
+        # define number of obstacles
+        self.num_obstacles = len(self.obstacles)
+        
         # Define the observation and action space from OpenAI Gym
         high = np.array([0.2, 0.3, 0.16, 0.3], dtype=np.float32) # [0.16, 0.3, 0.16, 0.3]
         low = np.array([-0.3, -0.15, -0.27, -0.11], dtype=np.float32) # [-0.27, -0.11, -0.27, -0.11]
         self.action_space = spaces.Box(low=-1*self.kappa_dot_max, high=self.kappa_dot_max,shape=(3,), dtype=np.float32)
         ########
-        
+
         # TODO: Add better environment observation space (more circle or algorithm that make automatically)
         self.observation_space = AmorphousSpace()
 
     def step(self, u, reward_function:str = 'step_minus_euclidean_square'):
-
-        x,y,goal_x,goal_y, obstacle_x, obstacle_y, obstacle2_x, obstacle2_y = self.state # Get the current state of the robot
-
+        # Get the current state of the robot - first 4 elements are robot and goal positions
+        state_values = self.state
+        x, y = state_values[0:2]  # Robot position
+        goal_x, goal_y = state_values[2:4]  # Goal position
+        # Obstacle positions are stored after index 4, two values per obstacle
+        
         # global variables to be used in the reward function
         global new_x 
         global new_y
@@ -177,25 +201,36 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
 
         elif reward_function == 'step_minus_weighted_euclidean':
             self.error = math.sqrt(((goal_x-x)**2)+((goal_y-y)**2))
-            obstacle_dist = math.sqrt(((obstacle_x-x)**2) + ((obstacle_y-y)**2))
-            obstacle2_dist = math.sqrt(((obstacle2_x-x)**2) + ((obstacle2_y-y)**2))
+            
+            # Calculate distances to all obstacles
+            obstacle_penalties = 0
+            for obstacle in self.obstacles:
+                obstacle_dist = math.sqrt(((obstacle['x']-x)**2) + ((obstacle['y']-y)**2))
+                if obstacle_dist <= 0.025:
+                    obstacle_penalties += (1 - (obstacle_dist / 0.025)) * 2
+
+            # Initialize distance scaling on first step
+            if not hasattr(self, 'initial_distance'):
+                self.initial_distance = self.error
+
+            # Calculate progress
+            progress = (self.previous_error - self.error) / self.initial_distance
             
             # Base reward from goal distance
-            self.costs = self.error
+            self.costs = self.error / self.initial_distance # - progress
+
+            # Progress reward
+            self.costs -= 2.0 * progress
+
+            # Time penalty
+            self.costs += 0.1 * self.dt
             
             # Goal proximity bonus (smoother gradient)
             if self.error <= 0.02:
                 self.costs -= (0.02 - self.error) * 5 # Increasing reward as gets closer
                 
             # Obstacle avoidance penalty (smoother gradient)
-            if obstacle_dist <= 0.025:
-                obstacle_penalty = (1 - (obstacle_dist / 0.025)) * 2 # Increases as gets closer
-                self.costs += obstacle_penalty
-            
-            # Second obstacle avoidance penalty
-            if obstacle2_dist <= 0.025:
-                obstacle2_penalty = (1 - (obstacle2_dist / 0.025)) * 2 # Increases as gets closer
-                self.costs += obstacle2_penalty
+            self.costs += obstacle_penalties
 
             # Just to show if the robot is moving along the goal or not
             if self.error < self.previous_error:
@@ -369,7 +404,10 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
             
         
         # States of the robot in numpy array
-        self.state = np.array([new_x,new_y,new_goal_x,new_goal_y, obstacle_x, obstacle_y, obstacle2_x, obstacle2_y])
+        new_state = [new_x, new_y, new_goal_x, new_goal_y]
+        for obstacle in self.obstacles:
+            new_state.extend([obstacle['x'], obstacle['y']])
+        self.state = np.array(new_state)
         
         if reward_function == 'step_minus_euclidean_square' or reward_function == 'step_minus_weighted_euclidean':
             return self._get_obs(), -self.costs, done, {} # Return the observation, the reward (-costs) and the done flag
@@ -377,42 +415,49 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
             return self._get_obs(), self.costs, done, {} # Return the observation, the reward (-costs) and the done flag
    
     def reset(self):
-       # self.overshoot0 = 0
-       # self.overshoot1 = 0
-       # Random state of the robot 
-       # (Random curvatures are given so that forward kinematics equation will generate random starting position)
-       self.kappa1 = np.random.uniform(low=-4, high=16)
-       self.kappa2 = np.random.uniform(low=-4, high=16)
-       self.kappa3 = np.random.uniform(low=-4, high=16)
-    
-       T3_cc = three_section_planar_robot(self.kappa1, self.kappa2, self.kappa3, self.l) # Generate the position of the tip of the robot
-       x,y = np.array([T3_cc[0,3],T3_cc[1,3]]) # Extract the x and y coordinates of the tip
-       
-       # Random target point
-       # (Random curvatures are given so that forward kinematics equation will generate random target position)
-       self.target_k1 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
-       self.target_k2 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
-       self.target_k3 = np.random.uniform(low=-4, high=16) # 6.2 # np.random.uniform(low=-4, high=16)
-       
-       T3_target = three_section_planar_robot(self.target_k1,self.target_k2,self.target_k3, self.l) # Generate the target point for the robot
-       goal_x,goal_y = np.array([T3_target[0,3],T3_target[1,3]]) # Extract the x and y coordinates of the target
+        # Reset the environment
+        # delete the initial distance
+        if hasattr(self, 'initial_distance'):
+            del self.initial_distance
 
-       # Set initial a dynamic obstacle point in the environment in the box of (-0.2,0.15) x (-0.15,0.05)
-       obstacle_x = -0.16 # np.random.uniform(low=-0.2, high=-0.15)
-       obstacle_y = 0.22 # np.random.uniform(low=-0.15, high=0.05)
+        # self.overshoot0 = 0
+        # self.overshoot1 = 0
+        # Random state of the robot 
+        # (Random curvatures are given so that forward kinematics equation will generate random starting position)
+        self.kappa1 = np.random.uniform(low=-4, high=16) # 5, 1, 0.1, 16
+        self.kappa2 = np.random.uniform(low=-4, high=16) # 14, 15, 0.1, 12
+        self.kappa3 = np.random.uniform(low=-4, high=16) # 16, 16, 0.1, 11
 
-       # Set second static obstacle
-       obstacle2_x = -0.22
-       obstacle2_y = 0.02
+        T3_cc = three_section_planar_robot(self.kappa1, self.kappa2, self.kappa3, self.l) # Generate the position of the tip of the robot
+        x,y = np.array([T3_cc[0,3],T3_cc[1,3]]) # Extract the x and y coordinates of the tip
 
-       self.state = x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y # Update the state of the robot
-       
-       self.last_u = None
-       return self._get_obs()
+        # Random target point
+        # (Random curvatures are given so that forward kinematics equation will generate random target position)
+        self.target_k1 = 6.2 # np.random.uniform(low=-4, high=16)
+        self.target_k2 = 6.2 # np.random.uniform(low=-4, high=16)
+        self.target_k3 = 6.2 # np.random.uniform(low=-4, high=16)
+
+        T3_target = three_section_planar_robot(self.target_k1,self.target_k2,self.target_k3, self.l) # Generate the target point for the robot
+        goal_x,goal_y = np.array([T3_target[0,3],T3_target[1,3]]) # Extract the x and y coordinates of the target
+
+        # Initialize state with robot and goal positions
+        state = [x, y, goal_x, goal_y]
+        
+        # Add all obstacle positions to state
+        for obstacle in self.obstacles:
+            state.extend([obstacle['x'], obstacle['y']])
+        
+        self.state = np.array(state)
+
+        # Initialize the error and previous error
+        self.error = math.sqrt(((goal_x-x)**2)+((goal_y-y)**2))
+        self.previous_error = self.error  # Initialize to current error
+
+        self.last_u = None
+        return self._get_obs()
     
     def _get_obs(self):
-        x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y = self.state
-        return np.array([x,y,goal_x,goal_y,obstacle_x,obstacle_y,obstacle2_x,obstacle2_y],dtype=np.float32)
+        return self.state.astype(np.float32)
     
     def render_calculate(self):
         # current state
@@ -433,11 +478,12 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         self.position_dic['Section2']['y'].append(T2_cc[:,13])
         self.position_dic['Section3']['x'].append(T3_cc[:,12])
         self.position_dic['Section3']['y'].append(T3_cc[:,13])
-        self.position_dic['Obs']['x'].append(self.state[4])
-        self.position_dic['Obs']['y'].append(self.state[5])
-        self.position_dic['Obs2']['x'].append(self.state[6])  # Static obstacle
-        self.position_dic['Obs2']['y'].append(self.state[7])   # Static obstacle
         
+        # Store obstacle positions
+        for i, obstacle in enumerate(self.obstacles):
+            obs_idx = 4 + i * 2  # Index in state array (after x,y,goal_x,goal_y)
+            self.position_dic[f'Obs{i+1}']['x'].append(self.state[obs_idx])
+            self.position_dic[f'Obs{i+1}']['y'].append(self.state[obs_idx + 1])
 
     def render_init(self):
         # This function is used to plot the robot in the environment (both in start and end state)
@@ -456,8 +502,10 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         #plt.scatter(T2_cc[-1,12],T2_cc[-1,13],linewidths=5,color = 'black')
         self.ax.plot(self.position_dic['Section3']['x'][i],self.position_dic['Section3']['y'][i],'g',linewidth=3)
         self.ax.scatter(self.position_dic['Section3']['x'][i][-1],self.position_dic['Section3']['y'][i][-1],linewidths=5,color = 'black')
-        self.ax.scatter(self.position_dic['Obs']['x'][i],self.position_dic['Obs']['y'][i],linewidths=5,color = 'red')
-        self.ax.scatter(self.position_dic['Obs2']['x'][i],self.position_dic['Obs2']['y'][i],linewidths=5,color = 'red')
+
+        # Plot all obstacles
+        for i in range(len(self.obstacles)):
+            self.ax.scatter(self.position_dic[f'Obs{i+1}']['x'][i], self.position_dic[f'Obs{i+1}']['y'][i], linewidths=5, color='red')
 
         # Plot the target point and trajectory of the robot
         self.ax.scatter(self.state[2],self.state[3],100, marker= "x",linewidths=2, color = 'red')
@@ -474,7 +522,7 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         return ani
         
         
-    def visualization(self,x_pos,y_pos):
+    def visualization(self, x_pos, y_pos):
         # This function is used to plot the robot in the environment (both in start and end state)
 
         # Start state
@@ -520,8 +568,11 @@ class continuumEnv(gym.Env): #TODO: Change it to 'ContinuumEnv' to follow standa
         
         # Plot the target point and trajectory of the robot
         plt.scatter(self.state[2],self.state[3],100, marker= "x",linewidths=4, color = 'red',label='Target Point')
-        plt.scatter(self.state[4],self.state[5],100, marker= "x",linewidths=4, color = 'black',label='Obstacle Point 1')
-        plt.scatter(self.state[6],self.state[7], 100, marker= "x",linewidths=4, color = 'black',label='Obstacle Point 2')
+        
+        # Plot obstacles
+        for i, obstacle in enumerate(self.obstacles):
+            plt.scatter(obstacle['x'], obstacle['y'], 100, marker="x", linewidths=4, color='black', label=f'Obstacle Point {i+1}')
+        
         plt.scatter(x_pos,y_pos,25,linewidths=0.03,color = 'blue',alpha=0.2)
         plt.xlim([-0.4, 0.4])
         plt.ylim([-0.4, 0.4])

@@ -40,7 +40,7 @@ episode_number = 1
 for _ in range(episode_number):
     env = continuumEnv() # initialize environment
 
-    std_dev = 0.2
+    std_dev = 0.3
     ou_noise = OUActionNoise(mean=np.zeros(3), std_deviation=float(std_dev) * np.ones(3))
 
     state = env.reset() # generate random starting point for the robot and random target point.
@@ -111,6 +111,8 @@ env.visualization(storage['pos']['x'],storage['pos']['y'])
 plt.xlabel("Position x [m]",fontsize=15)
 plt.ylabel("Position y [m]",fontsize=15)
 plt.show()
+# save the plot
+plt.savefig("result.png")
 env.close()
 # %%
 # # uncomment below for animation 
