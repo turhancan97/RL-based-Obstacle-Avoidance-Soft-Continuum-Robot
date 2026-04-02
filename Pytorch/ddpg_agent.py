@@ -1,9 +1,13 @@
-import numpy as np
-import random
 import copy
-from collections import namedtuple, deque
+import random
+from collections import deque, namedtuple
 
-from model import Actor, Critic
+import numpy as np
+
+try:
+    from .model import Actor, Critic
+except ImportError:  # script-mode compatibility
+    from model import Actor, Critic
 
 import torch
 import torch.nn.functional as F
@@ -26,12 +30,12 @@ WEIGHT_DECAY = 1e-4     # L2 weight decay / 0.0001
 # WEIGHT_DECAY = 0.0001   # L2 weight decay
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-if device == 'cpu':
+if device.type == "cpu":
     print('GPU is not available')
 print('Using device:', device)
 print()
 #Additional Info when using cuda
-if device.type == 'cuda:0':
+if device.type == "cuda":
     print(torch.cuda.get_device_name(0))
     print('Memory Usage:')
     print('Allocated:', round(torch.cuda.memory_allocated(0)/1024**3,1), 'GB')

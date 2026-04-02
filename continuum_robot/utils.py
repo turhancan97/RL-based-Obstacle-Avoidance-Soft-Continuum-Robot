@@ -1,4 +1,6 @@
 import pickle
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 import numpy as np
@@ -25,7 +27,25 @@ def load_pickle_file(data):
         data = pickle.load(f)
     return data
 
-def reward_visualization(ep_reward_list, avg_reward_list):
+def _ensure_output_dir(output_dir):
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
+def _save_current_figure(output_dir, filename):
+    output_path = _ensure_output_dir(output_dir) / filename
+    plt.gcf().savefig(output_path, dpi=300, bbox_inches="tight")
+    return output_path
+
+
+def reward_visualization(
+    ep_reward_list,
+    avg_reward_list,
+    output_dir="visualizations/reward",
+    filename="reward_visualization.png",
+    show=False,
+):
     fig, axs = plt.subplots(1, 2,figsize=(26, 13))
     # Episodes versus Episodic Rewards
     # Give plot a gray background like ggplot.
@@ -73,8 +93,18 @@ def reward_visualization(ep_reward_list, avg_reward_list):
     axs[0].yaxis.set_minor_locator(AutoMinorLocator(2))
     axs[1].xaxis.set_minor_locator(AutoMinorLocator(2))
     axs[1].yaxis.set_minor_locator(AutoMinorLocator(2))
+    saved_path = _save_current_figure(output_dir, filename)
+    if show:
+        plt.show()
+    return saved_path
 
-def reward_log10_visualization(ep_reward_list, avg_reward_list):
+def reward_log10_visualization(
+    ep_reward_list,
+    avg_reward_list,
+    output_dir="visualizations/reward",
+    filename="reward_log10_visualization.png",
+    show=False,
+):
     fig, axs = plt.subplots(1, 2,figsize=(20, 10))
 
     # Episodes versus Episodic Rewards
@@ -123,10 +153,31 @@ def reward_log10_visualization(ep_reward_list, avg_reward_list):
     axs[0].yaxis.set_minor_locator(AutoMinorLocator(2))
     axs[1].xaxis.set_minor_locator(AutoMinorLocator(2))
     axs[1].yaxis.set_minor_locator(AutoMinorLocator(2))
+    saved_path = _save_current_figure(output_dir, filename)
+    if show:
+        plt.show()
+    return saved_path
 
-def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kappa_1,kappa_2,kappa_3,goal_x,goal_y):
+
+def plot_various_results(
+    plot_choice,
+    error_store,
+    error_x,
+    error_y,
+    pos_x,
+    pos_y,
+    kappa_1,
+    kappa_2,
+    kappa_3,
+    goal_x,
+    goal_y,
+    output_dir="visualizations/tests",
+    file_prefix="plot_various_results",
+    show=True,
+):
     if plot_choice == 1:
         # Error
+        plt.figure()
         plt.plot(range(len(error_store)),error_store,c = 'red',linewidth=2,label='Total Error')
         plt.title("Error Plot of the Test Simulation")
         plt.ylabel("Error",fontsize=20)
@@ -137,9 +188,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
         plt.legend(fontsize=15)
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_total_error.png")
+        if show:
+            plt.show()
 
         # X Error
+        plt.figure()
         plt.plot(range(len(error_x)),error_x,c = 'green',linewidth=2)
         plt.title("Error on the X Axis")
         plt.ylabel("Error",fontsize=20)
@@ -149,9 +203,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='major',linewidth=0.7)
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_x_error.png")
+        if show:
+            plt.show()
 
         # Y Error
+        plt.figure()
         plt.plot(range(len(error_y)),error_y,c = 'blue',linewidth=2)
         plt.title("Error on the Y Axis")
         plt.ylabel("Error",fontsize=20)
@@ -161,9 +218,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='major',linewidth=0.7)
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_y_error.png")
+        if show:
+            plt.show()
 
         # X-Y Error
+        plt.figure()
         plt.plot(range(len(error_x)),error_x,c = 'blue',linewidth=2, label = "X Axis")
         plt.plot(range(len(error_y)),error_y,c = 'green',linewidth=2, label = "Y Axis")
         plt.title("Error on the X-Y Axis")
@@ -175,10 +235,13 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
         plt.legend(fontsize=15)
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_xy_error.png")
+        if show:
+            plt.show()
 
     elif plot_choice == 2:
         # X Position
+        plt.figure()
         plt.plot(range(len(pos_x)),pos_x,c = 'green',linewidth=2)
         plt.axhline(y=goal_x)
         plt.legend(["Simulation Result","Reference Signal"])
@@ -190,9 +253,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='major',linewidth=0.7)
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_x_position.png")
+        if show:
+            plt.show()
 
         # Y Position
+        plt.figure()
         plt.plot(range(len(pos_y)),pos_y,c = 'red',linewidth=2)
         plt.axhline(y=goal_y)
         plt.legend(["Simulation Result","Reference Signal"])
@@ -204,9 +270,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='major',linewidth=0.7)
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_y_position.png")
+        if show:
+            plt.show()
 
         # X-Y Position
+        plt.figure()
         plt.plot(range(len(pos_x)),pos_x,c = 'red',linewidth=2)
         plt.axhline(y=goal_x)
         plt.plot(range(len(pos_y)),pos_y,c = 'green',linewidth=2)
@@ -220,9 +289,12 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='major',linewidth=0.7)
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_xy_position.png")
+        if show:
+            plt.show()
     elif plot_choice == 3:
         # Kappa Plots
+        plt.figure()
         plt.plot(range(len(kappa_1)),kappa_1,c = 'blue',linewidth=2, label = "Curvature-1")
         plt.plot(range(len(kappa_2)),kappa_2,c = 'green',linewidth=2, label = "Curvature-2")
         plt.plot(range(len(kappa_3)),kappa_3,c = 'red',linewidth=2, label = "Curvature-3")
@@ -235,9 +307,26 @@ def plot_various_results(plot_choice,error_store,error_x,error_y,pos_x,pos_y,kap
         plt.grid(which='minor',linewidth=0.5)
         plt.minorticks_on()
         plt.legend(fontsize=15)
-        plt.show()
+        _save_current_figure(output_dir, f"{file_prefix}_kappa.png")
+        if show:
+            plt.show()
 
-def sub_plot_various_results(error_store,error_x,error_y,pos_x,pos_y,kappa_1,kappa_2,kappa_3,goal_x,goal_y):
+
+def sub_plot_various_results(
+    error_store,
+    error_x,
+    error_y,
+    pos_x,
+    pos_y,
+    kappa_1,
+    kappa_2,
+    kappa_3,
+    goal_x,
+    goal_y,
+    output_dir="visualizations/tests",
+    filename="sub_plot_various_results.png",
+    show=True,
+):
     # As Subplots
     fig, axs = plt.subplots(2, 2)
     fig.tight_layout(h_pad=5, w_pad=5)
@@ -270,9 +359,21 @@ def sub_plot_various_results(error_store,error_x,error_y,pos_x,pos_y,kappa_1,kap
         ax.grid(which='major',linewidth=0.7)
         ax.grid(which='minor',linewidth=0.5)
         ax.minorticks_on()
-    plt.show()
+    _save_current_figure(output_dir, filename)
+    if show:
+        plt.show()
 
-def plot_average_error(error_x, error_y, error_store, N = 1000,episode_number=10):
+
+def plot_average_error(
+    error_x,
+    error_y,
+    error_store,
+    N = 1000,
+    episode_number=10,
+    output_dir="visualizations/tests",
+    file_prefix="plot_average_error",
+    show=True,
+):
     theList_x = error_x
     subList_x = [theList_x[n:n+N] for n in range(0, len(theList_x), N)]
     error_x_np = np.array(subList_x, dtype=np.float32).reshape(-1, N)
@@ -292,22 +393,29 @@ def plot_average_error(error_x, error_y, error_store, N = 1000,episode_number=10
     error_combined_std = error_combined_np.std(axis=0)
 
     # X Error
+    plt.figure()
     plt.plot(range(len(error_x_mean)),error_x_mean,c = 'blue',linewidth=3)
     plt.fill_between(range(len(error_x_mean)),error_x_mean-error_x_std,error_x_mean+error_x_std,alpha=0.2,color='b')
     plt.title(f"{episode_number} episodes of Distance Error on the X Axis with Confidence Band")
     plt.xlabel("Step")
     plt.ylabel("Distance Error")
-    plt.show()
+    _save_current_figure(output_dir, f"{file_prefix}_x.png")
+    if show:
+        plt.show()
 
     # # Y Error
+    plt.figure()
     plt.plot(range(len(error_y_mean)),error_y_mean,c = 'red',linewidth=3)
     plt.fill_between(range(len(error_y_mean)),error_y_mean-error_y_std,error_y_mean+error_y_std,alpha=0.2,color ="r")
     plt.title(f"{episode_number} episodes of Distance Error on the Y Axis with Confidence Band")
     plt.xlabel("Step")
     plt.ylabel("Distance Error")
-    plt.show()
+    _save_current_figure(output_dir, f"{file_prefix}_y.png")
+    if show:
+        plt.show()
 
     # X-Y Error
+    plt.figure()
     plt.plot(range(len(error_x_mean)),error_x_mean,c = 'blue',linewidth=2, label = "X Axis")
     plt.fill_between(range(len(error_x_mean)),error_x_mean-error_x_std,error_x_mean+error_x_std,alpha=0.3,color='b')
     plt.plot(range(len(error_y_mean)),error_y_mean,c = 'red',linewidth=2, label = "Y Axis")
@@ -316,12 +424,17 @@ def plot_average_error(error_x, error_y, error_store, N = 1000,episode_number=10
     plt.xlabel("Step")
     plt.ylabel("Distance Error")
     plt.legend()
-    plt.show()
+    _save_current_figure(output_dir, f"{file_prefix}_xy.png")
+    if show:
+        plt.show()
 
     # Combined Error
+    plt.figure()
     plt.plot(range(len(error_combined_mean)),error_combined_mean,c = 'black',linewidth=3)
     plt.fill_between(range(len(error_combined_mean)),error_combined_mean-error_combined_std,error_combined_mean+error_combined_std,alpha=0.2,color ="k")
     plt.title(f"{episode_number} episodes of Total Distance Error with Confidence Band")
     plt.xlabel("Step")
     plt.ylabel("Distance Error")
-    plt.show()
+    _save_current_figure(output_dir, f"{file_prefix}_combined.png")
+    if show:
+        plt.show()

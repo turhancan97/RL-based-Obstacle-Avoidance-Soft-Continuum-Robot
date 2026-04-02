@@ -13,4 +13,4 @@ source ~/miniconda3/etc/profile.d/conda.sh
 conda activate continuum-rl
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib/
 
-python ddpg.py
+python -m Pytorch.ddpg --mode train

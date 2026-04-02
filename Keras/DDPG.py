@@ -1,51 +1,39 @@
-import sys
-sys.path.append('../')
-sys.path.append('../Reinforcement Learning')
-sys.path.append('../Tests')
+"""Keras DDPG training/evaluation entrypoint (import-safe)."""
 
-import os
-import yaml
-# import gym
-import tensorflow as tf
-print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
-from tensorflow.keras import layers
+from __future__ import annotations
+
+import argparse
 import pickle
-import numpy as np
-# import matplotlib.pyplot as plt
 import time
-import math
-# from forward_velocity_kinematics import three_section_planar_robot
-from env import continuumEnv
+from pathlib import Path
+from typing import Any
+
+import h5py
+import numpy as np
+import tensorflow as tf
+import yaml
+from tensorflow.keras import layers
+
+from continuum_rl.artifacts import ARTIFACT_VERSION, ensure_dir, read_metadata, write_metadata
+from continuum_rl.env import ContinuumEnv
+from continuum_rl.gym_compat import unpack_step_output
 
 
-# * Read the config file
-# Get the absolute path to the directory containing this script
-dir_path = os.path.dirname(os.path.realpath(__file__))
-# Construct the absolute path to the file
-file_path = os.path.join(dir_path, "config.yaml")
-# load config file
-with open(file_path, "r") as file:
-    config = yaml.safe_load(file)
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = BASE_DIR / "config.yaml"
 
-env = continuumEnv()
 
-num_states = env.obs_size # 4 + (len(self.obstacles) * 2)
-print("Size of State Space ->  {}".format(num_states))
-num_actions = env.action_space.shape[0]
-print("Size of Action Space ->  {}".format(num_actions))
+def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+    with config_path.open("r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
 
-upper_bound = env.action_space.high[0]
-lower_bound = env.action_space.low[0]
 
-print("Max Value of Action ->  {}".format(upper_bound))
-print("Min Value of Action ->  {}".format(lower_bound))
-start_time = time.time()
-# %%
+config = load_config()
+
+
 class OUActionNoise:
-    """
-    It creates a noise process that is correlated with the previous noise value 
-    # TODO: add nice description for the noise.
-    """
+    """Ornstein-Uhlenbeck noise for exploration."""
+
     def __init__(self, mean, std_deviation, theta=0.15, dt=1e-2, x_initial=None):
         self.theta = theta
         self.mean = mean
@@ -55,402 +43,453 @@ class OUActionNoise:
         self.reset()
 
     def __call__(self):
-        # Formula taken from https://www.wikipedia.org/wiki/Ornstein-Uhlenbeck_process.
         x = (
             self.x_prev
             + self.theta * (self.mean - self.x_prev) * self.dt
             + self.std_dev * np.sqrt(self.dt) * np.random.normal(size=self.mean.shape)
         )
-        # Store x into x_prev
-        # Makes next noise dependent on current one
         self.x_prev = x
         return x
 
     def reset(self):
-        if self.x_initial is not None:
-            self.x_prev = self.x_initial
-        else:
-            self.x_prev = np.zeros_like(self.mean)
-            
+        self.x_prev = self.x_initial if self.x_initial is not None else np.zeros_like(self.mean)
 
-class Buffer:
-    """
-    Class docstrings go here. # TODO: add nice description for the Buffer.
-    """
-    def __init__(self, buffer_capacity=100000, batch_size=64):
-        # Number of "experiences" to store at max
+
+class ReplayBuffer:
+    def __init__(self, num_states: int, num_actions: int, buffer_capacity: int = 100_000, batch_size: int = 64):
         self.buffer_capacity = buffer_capacity
-        # Num of tuples to train on.
         self.batch_size = batch_size
-
-        # Its tells us num of times record() was called.
         self.buffer_counter = 0
+        self.state_buffer = np.zeros((self.buffer_capacity, num_states), dtype=np.float32)
+        self.action_buffer = np.zeros((self.buffer_capacity, num_actions), dtype=np.float32)
+        self.reward_buffer = np.zeros((self.buffer_capacity, 1), dtype=np.float32)
+        self.next_state_buffer = np.zeros((self.buffer_capacity, num_states), dtype=np.float32)
 
-        # Instead of list of tuples as the exp.replay concept go
-        # We use different np.arrays for each tuple element
-        self.state_buffer = np.zeros((self.buffer_capacity, num_states))
-        self.action_buffer = np.zeros((self.buffer_capacity, num_actions))
-        self.reward_buffer = np.zeros((self.buffer_capacity, 1))
-        self.next_state_buffer = np.zeros((self.buffer_capacity, num_states))
-
-    # Takes (s,a,r,s') obervation tuple as input
     def record(self, obs_tuple):
-        # Set index to zero if buffer_capacity is exceeded,
-        # replacing old records
         index = self.buffer_counter % self.buffer_capacity
-
         self.state_buffer[index] = obs_tuple[0]
-        self.action_buffer[index] = obs_tuple[1][0]
+        self.action_buffer[index] = obs_tuple[1]
         self.reward_buffer[index] = obs_tuple[2]
         self.next_state_buffer[index] = obs_tuple[3]
-
         self.buffer_counter += 1
 
-    # Eager execution is turned on by default in TensorFlow 2. Decorating with tf.function allows
-    # TensorFlow to build a static graph out of the logic and computations in our function.
-    # This provides a large speed up for blocks of code that contain many small TensorFlow operations such as this one.
-    @tf.function
-    def update(
-        self, state_batch, action_batch, reward_batch, next_state_batch,
-    ):
-        # Training and updating Actor & Critic networks.
-        # See Pseudo Code.
-        # ===================================================================== #
-		#                               Actor Model                             #
-        # ===================================================================== #
-        #                               Critic Model                            #
-        # ===================================================================== #
-		# Chain rule: find the gradient of chaging the actor network params in  #
-		# getting closest to the final value network predictions, i.e. de/dA    #
-		# Calculate de/dA as = de/dC * dC/dA, where e is error, C critic, A act #
-		# ===================================================================== #
-        with tf.GradientTape() as tape:
-            target_actions = target_actor(next_state_batch, training=TRAIN)
-            y = reward_batch + gamma * target_critic(
-                [next_state_batch, target_actions], training=TRAIN
-            )
-            critic_value = critic_model([state_batch, action_batch], training=TRAIN)
-            critic_loss = tf.math.reduce_mean(tf.math.square(y - critic_value))
-
-        critic_grad = tape.gradient(critic_loss, critic_model.trainable_variables)
-        critic_optimizer.apply_gradients(
-            zip(critic_grad, critic_model.trainable_variables)
-        )
-
-        with tf.GradientTape() as tape:
-            actions = actor_model(state_batch, training=TRAIN)
-            critic_value = critic_model([state_batch, actions], training=TRAIN)
-            # Used `-value` as we want to maximize the value given
-            # by the critic for our actions
-            actor_loss = -tf.math.reduce_mean(critic_value)
-
-        actor_grad = tape.gradient(actor_loss, actor_model.trainable_variables)
-        actor_optimizer.apply_gradients(
-            zip(actor_grad, actor_model.trainable_variables)
-        )
-
-    # We compute the loss and update parameters
-    def learn(self):
-        # Get sampling range
+    def sample(self):
         record_range = min(self.buffer_counter, self.buffer_capacity)
-        # Randomly sample indices
-        batch_indices = np.random.choice(record_range, self.batch_size)
-
-        # Convert to tensors
+        if record_range < self.batch_size:
+            return None
+        batch_indices = np.random.choice(record_range, self.batch_size, replace=False)
         state_batch = tf.convert_to_tensor(self.state_buffer[batch_indices])
         action_batch = tf.convert_to_tensor(self.action_buffer[batch_indices])
-        reward_batch = tf.convert_to_tensor(self.reward_buffer[batch_indices])
-        reward_batch = tf.cast(reward_batch, dtype=tf.float32)
+        reward_batch = tf.convert_to_tensor(self.reward_buffer[batch_indices], dtype=tf.float32)
         next_state_batch = tf.convert_to_tensor(self.next_state_buffer[batch_indices])
+        return state_batch, action_batch, reward_batch, next_state_batch
 
-        self.update(state_batch, action_batch, reward_batch, next_state_batch)
 
-
-# This update target parameters slowly
-# Based on rate `tau`, which is much less than one.
-@tf.function
-def update_target(target_weights, weights, tau):
-    for (a, b) in zip(target_weights, weights):
-        a.assign(b * tau + a * (1 - tau))
-
-    # ========================================================================= #
-	#                              Model Definitions                            #
-	# ========================================================================= #
-    
-def get_actor():
-    # Initialize weights between -3e-3 and 3-e3
-    last_init = tf.random_uniform_initializer(minval=-0.003, maxval=0.003) # minval=-0.003, maxval=0.003
-
+def get_actor(num_states: int, num_actions: int, upper_bound: float):
+    last_init = tf.random_uniform_initializer(minval=-0.003, maxval=0.003)
     inputs = layers.Input(shape=(num_states,))
-    # inputs = layers.Dropout(0.2)(inputs) # delete
-    # inputs = layers.BatchNormalization()(inputs)  # delete
-    out = layers.Dense(256, activation="relu")(inputs) # 512
-    # out = layers.BatchNormalization()(out)  # delete
-    out = layers.Dense(256, activation="relu")(out) # 512
-    # out = layers.BatchNormalization()(out)  # delete
-    out = layers.Dense(256, activation="relu")(out) # 256
-    # out = layers.BatchNormalization()(out)  # delete
-    out = layers.Dense(128, activation="relu")(out) # 128
-    # out = layers.BatchNormalization()(out) # delete
-    # out = layers.Dense(256, activation="relu")(out) # delete
-    
-    # Outputs the actions - We have 3 actions
+    out = layers.Dense(256, activation="relu")(inputs)
+    out = layers.Dense(256, activation="relu")(out)
+    out = layers.Dense(256, activation="relu")(out)
+    out = layers.Dense(128, activation="relu")(out)
     outputs = layers.Dense(num_actions, activation="tanh", kernel_initializer=last_init)(out)
-
-    # Our upper bound is 1.0 for Continuum Robot (Kappa dot).
-    outputs = outputs * upper_bound # * env.dt
-    # outputs = outputs * upper_bound
-    model = tf.keras.Model(inputs, outputs)
-    return model
+    outputs = outputs * upper_bound
+    return tf.keras.Model(inputs, outputs)
 
 
-def get_critic():
-    # State as input
+def _build_actor_from_legacy_weights(checkpoint_path: Path, upper_bound: float) -> tf.keras.Model:
+    kernels: list[tuple[str, tuple[int, int]]] = []
+    with h5py.File(checkpoint_path, "r") as f:
+        def _collect(name, obj):
+            if isinstance(obj, h5py.Dataset) and name.endswith("kernel:0") and len(obj.shape) == 2:
+                kernels.append((name, (int(obj.shape[0]), int(obj.shape[1]))))
+        f.visititems(_collect)
+
+    if not kernels:
+        raise ValueError(f"No dense kernel tensors found in legacy checkpoint '{checkpoint_path}'.")
+
+    def _kernel_sort_key(item: tuple[str, tuple[int, int]]):
+        name = item[0].split("/")[0]
+        if "_" in name and name.split("_")[-1].isdigit():
+            return int(name.split("_")[-1])
+        if name == "dense":
+            return 0
+        return 10_000
+
+    kernels.sort(key=_kernel_sort_key)
+    shapes = [shape for _, shape in kernels]
+    input_dim = shapes[0][0]
+
+    inputs = layers.Input(shape=(input_dim,))
+    x = inputs
+    for idx, (_, out_dim) in enumerate(shapes):
+        activation = "tanh" if idx == (len(shapes) - 1) else "relu"
+        x = layers.Dense(out_dim, activation=activation)(x)
+    outputs = x * upper_bound
+    return tf.keras.Model(inputs, outputs)
+
+
+def get_critic(num_states: int, num_actions: int):
     state_input = layers.Input(shape=(num_states,))
-    # state_input = layers.Dropout(0.2)(state_input) # delete
-    # state_input = layers.BatchNormalization()(state_input) # delete
-    state_out = layers.Dense(256, activation="relu")(state_input) # 128
-    # state_out = layers.BatchNormalization()(state_out) # delete
-    state_out = layers.Dense(256, activation="relu")(state_out) # 256
-    # state_out = layers.BatchNormalization()(state_out) # delete
-    # state_out = layers.Dense(32, activation="relu")(state_out) # 128
+    state_out = layers.Dense(256, activation="relu")(state_input)
+    state_out = layers.Dense(256, activation="relu")(state_out)
 
-    # Action as input
     action_input = layers.Input(shape=(num_actions,))
-    # action_input = layers.Dropout(0.2)(action_input) # delete
-    # action_input = layers.BatchNormalization()(action_input) # delete
-    action_out = layers.Dense(256, activation="relu")(action_input) # 256
-    # action_out = layers.BatchNormalization()(action_out) # delete
-    # action_out = layers.Dense(64, activation="relu")(action_out) # 64
-    # action_out = layers.BatchNormalization()(action_out) # delete
-    # action_out = layers.Dense(32, activation="relu")(action_out) # 32
-    
-    # Both are passed through seperate layer before concatenating
+    action_out = layers.Dense(256, activation="relu")(action_input)
+
     concat = layers.Concatenate()([state_out, action_out])
-
-    out = layers.Dense(256, activation="relu")(concat) # 256
-    # out = layers.BatchNormalization()(out) # delete
-    out = layers.Dense(128, activation="relu")(out) # 256
-    # out = layers.BatchNormalization()(out)  # delete
-    # out = layers.Dense(128, activation="relu")(out) # 128
-    # out = layers.BatchNormalization()(out) # delete
-    # out = layers.Dense(256, activation="relu")(out) # delete
-    # out = layers.BatchNormalization()(out)  # delete
-    outputs = layers.Dense(1)(out) # outputs the Q values (layers.Dense(1)(out))
-
-    # Outputs single value for give state-action
-    model = tf.keras.Model([state_input, action_input], outputs)
-
-    return model
+    out = layers.Dense(256, activation="relu")(concat)
+    out = layers.Dense(128, activation="relu")(out)
+    outputs = layers.Dense(1)(out)
+    return tf.keras.Model([state_input, action_input], outputs)
 
 
-def policy(state, noise_object,add_noise=True):
-    sampled_actions = tf.squeeze(actor_model(state))
-    noise = noise_object() # change to 0 to delete noise
-    # Adding noise to action
+def soft_update(target_model: tf.keras.Model, source_model: tf.keras.Model, tau: float) -> None:
+    """Keras 2/3-compatible target update (no SymbolicTensor.assign path)."""
+    target_weights = target_model.get_weights()
+    source_weights = source_model.get_weights()
+    new_weights = [source * tau + target * (1.0 - tau) for source, target in zip(source_weights, target_weights)]
+    target_model.set_weights(new_weights)
+
+
+def _policy_impl(state, noise_object, actor, lower_bound, upper_bound, add_noise=True):
+    sampled_actions = tf.squeeze(actor(state))
     if add_noise:
-        sampled_actions = sampled_actions.numpy() + noise
-    
-    # We make sure action is within bounds
+        sampled_actions = sampled_actions.numpy() + noise_object()
     legal_action = np.clip(sampled_actions, lower_bound, upper_bound)
+    return np.asarray(legal_action, dtype=np.float32)
 
-    return [np.squeeze(legal_action)]
 
-# %%
+def _expected_metadata(env: ContinuumEnv, goal_type: str, reward_file: str, reward_function: str) -> dict[str, Any]:
+    return {
+        "framework": "keras",
+        "artifact_version": ARTIFACT_VERSION,
+        "state_dim": env.obs_size,
+        "obstacle_count": env.num_obstacles,
+        "goal_type": goal_type,
+        "reward_function": reward_function,
+        "reward_file": reward_file,
+    }
 
-actor_model = get_actor()
-critic_model = get_critic()
 
-target_actor = get_actor()
-target_critic = get_critic()
+def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str, Any]) -> None:
+    checkpoint_path = _resolve_weights_path(checkpoint_path)
+    metadata = read_metadata(checkpoint_path)
+    if metadata:
+        actual_state_dim = metadata.get("state_dim")
+    else:
+        with h5py.File(checkpoint_path, "r") as f:
+            actual_state_dim = None
+            for layer in f.keys():
+                group = f[layer]
+                if isinstance(group, h5py.Group) and "vars" in group and "0" in group["vars"]:
+                    arr = group["vars"]["0"]
+                    if len(arr.shape) == 2:
+                        actual_state_dim = int(arr.shape[0])
+                        break
+            if actual_state_dim is None:
+                for name, dataset in f.items():
+                    if isinstance(dataset, h5py.Dataset) and len(dataset.shape) == 2:
+                        actual_state_dim = int(dataset.shape[0])
+                        break
+            if actual_state_dim is None:
+                def _finder(_name, obj):
+                    nonlocal actual_state_dim
+                    if actual_state_dim is not None:
+                        return
+                    if isinstance(obj, h5py.Dataset) and len(obj.shape) == 2:
+                        actual_state_dim = int(obj.shape[0])
+                f.visititems(_finder)
+        if actual_state_dim is None:
+            raise ValueError(f"Unable to infer state_dim for legacy checkpoint '{checkpoint_path}'.")
 
-# Making the weights equal initially
-target_actor.set_weights(actor_model.get_weights())
-target_critic.set_weights(critic_model.get_weights())
+    if actual_state_dim != expected["state_dim"]:
+        raise ValueError(
+            f"Checkpoint incompatible: expected state_dim={expected['state_dim']}, actual={actual_state_dim}. "
+            "Use --observation-mode legacy4d or regenerate v2 checkpoint."
+        )
 
-# actor_model.load_weights("continuum_actor.h5")
-# critic_model.load_weights("continuum_critic.h5")
-# target_actor.load_weights("continuum_target_actor.h5")
-# target_critic.load_weights("continuum_target_critic.h5")
 
-# Learning rate for actor-critic models
-critic_lr = 1e-3        # learning rate of the critic
-actor_lr = 1e-4         # learning rate of the actor
+def _save_weights(
+    actor_model: tf.keras.Model,
+    critic_model: tf.keras.Model,
+    target_actor: tf.keras.Model,
+    target_critic: tf.keras.Model,
+    env: ContinuumEnv,
+    goal_type: str,
+    reward_file: str,
+    reward_function: str,
+    ep_reward_list: list[float] | None = None,
+    avg_reward_list: list[float] | None = None,
+) -> None:
+    metadata = _expected_metadata(env, goal_type, reward_file, reward_function)
 
-critic_optimizer = tf.keras.optimizers.Adam(critic_lr)
-actor_optimizer = tf.keras.optimizers.Adam(actor_lr)
+    v2_model_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "model")
+    actor_path = v2_model_dir / "continuum_actor.weights.h5"
+    critic_path = v2_model_dir / "continuum_critic.weights.h5"
+    target_actor_path = v2_model_dir / "continuum_target_actor.weights.h5"
+    target_critic_path = v2_model_dir / "continuum_target_critic.weights.h5"
 
-total_episodes = 5000
-# Discount factor for future rewards
-gamma = 0.99            # discount factor
-# Used to update target networks
-tau = 1e-3              # for soft update of target parameters
+    actor_model.save_weights(actor_path)
+    critic_model.save_weights(critic_path)
+    target_actor.save_weights(target_actor_path)
+    target_critic.save_weights(target_critic_path)
+    for p in (actor_path, critic_path, target_actor_path, target_critic_path):
+        write_metadata(p, metadata)
 
-buffer = Buffer(int(1e6), 256) # Buffer(50000, 64)
+    v2_rewards_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "rewards")
+    if ep_reward_list is not None:
+        with (v2_rewards_dir / "ep_reward_list.pickle").open("wb") as f:
+            pickle.dump(ep_reward_list, f, pickle.HIGHEST_PROTOCOL)
+    if avg_reward_list is not None:
+        with (v2_rewards_dir / "avg_reward_list.pickle").open("wb") as f:
+            pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
 
-# %% Train or Evaluate
-# To store reward history of each episode
-ep_reward_list = []
-# To store average reward history of last few episodes
-avg_reward_list = []
-counter = 0
-avg_reward = 0
+    # Legacy compatibility outputs.
+    legacy_dir = ensure_dir(BASE_DIR / "experiment")
+    legacy_actor = legacy_dir / "continuum_actor.weights.h5"
+    legacy_critic = legacy_dir / "continuum_critic.weights.h5"
+    legacy_target_actor = legacy_dir / "continuum_target_actor.weights.h5"
+    legacy_target_critic = legacy_dir / "continuum_target_critic.weights.h5"
+    actor_model.save_weights(legacy_actor)
+    critic_model.save_weights(legacy_critic)
+    target_actor.save_weights(legacy_target_actor)
+    target_critic.save_weights(legacy_target_critic)
+    for p in (legacy_actor, legacy_critic, legacy_target_actor, legacy_target_critic):
+        write_metadata(p, metadata)
 
-TRAIN = True
 
-if TRAIN:
-    std_dev = 0.3
-    ou_noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(std_dev) * np.ones(num_actions))
-    
+def train(
+    total_episodes: int = 500,
+    max_steps: int = 500,
+    observation_mode: str = "canonical",
+    goal_type: str = "fixed_goal",
+    reward_function: str = "step_minus_weighted_euclidean",
+    reward_file: str = "reward_step_minus_weighted_euclidean",
+) -> list[float]:
+    start_time = time.time()
+    env = ContinuumEnv(observation_mode=observation_mode, goal_type=goal_type)
+    num_states = env.obs_size
+    num_actions = env.action_space.shape[0]
+    upper_bound = float(env.action_space.high[0])
+    lower_bound = float(env.action_space.low[0])
+
+    actor_model = get_actor(num_states, num_actions, upper_bound)
+    critic_model = get_critic(num_states, num_actions)
+    target_actor = get_actor(num_states, num_actions, upper_bound)
+    target_critic = get_critic(num_states, num_actions)
+    target_actor.set_weights(actor_model.get_weights())
+    target_critic.set_weights(critic_model.get_weights())
+
+    critic_optimizer = tf.keras.optimizers.Adam(1e-3)
+    actor_optimizer = tf.keras.optimizers.Adam(1e-4)
+    gamma = 0.99
+    tau = 1e-3
+
+    @tf.function
+    def update_batch(state_batch, action_batch, reward_batch, next_state_batch):
+        with tf.GradientTape() as tape:
+            target_actions = target_actor(next_state_batch, training=True)
+            y = reward_batch + gamma * target_critic([next_state_batch, target_actions], training=True)
+            critic_value = critic_model([state_batch, action_batch], training=True)
+            critic_loss = tf.math.reduce_mean(tf.math.square(y - critic_value))
+        critic_grad = tape.gradient(critic_loss, critic_model.trainable_variables)
+        critic_optimizer.apply_gradients(zip(critic_grad, critic_model.trainable_variables))
+
+        with tf.GradientTape() as tape:
+            actions = actor_model(state_batch, training=True)
+            critic_value = critic_model([state_batch, actions], training=True)
+            actor_loss = -tf.math.reduce_mean(critic_value)
+        actor_grad = tape.gradient(actor_loss, actor_model.trainable_variables)
+        actor_optimizer.apply_gradients(zip(actor_grad, actor_model.trainable_variables))
+
+    buffer = ReplayBuffer(num_states=num_states, num_actions=num_actions, buffer_capacity=int(1e6), batch_size=256)
+    ep_reward_list: list[float] = []
+    avg_reward_list: list[float] = []
+    counter = 0
+    noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(0.3) * np.ones(num_actions))
+
     for ep in range(total_episodes):
-        
-        # prev_state = env.reset_known() # starting position is always same
-        prev_state = env.reset() # starting postion is random (within task space)
-        # high = np.array([0.18, 0.3], dtype=np.float32)
-        # low = np.array([-0.25, -0.1], dtype=np.float32)
-        # env.q_goal = np.random.uniform(low=low, high=high)
+        prev_state, _ = env.reset()
+        episodic_reward = 0.0
+
         if ep % 50 == 0:
-            print('Episode Number',ep)
-            print("Initial Position is",prev_state[0:2])
-            print("===============================================================")
-            print("Target Position is",prev_state[2:4])
-            print("===============================================================")
-            print("Initial Kappas are ",[env.kappa1,env.kappa2,env.kappa3])
-            print("===============================================================")
-            print("Goal Kappas are ",[env.target_k1,env.target_k2,env.target_k3])
-            print("===============================================================")
-        
-        # time.sleep(2) # uncomment when training in local computer
-        episodic_reward = 0
-    
-        # while True:
-        for i in range(500):
-            # Uncomment this to see the Actor in action
-            # But not in a python notebook.
-            # env.render()
-    
+            print("Episode Number", ep)
+            print("Initial Position is", prev_state[0:2])
+            print("Target Position is", prev_state[2:4])
+
+        for _ in range(max_steps):
             tf_prev_state = tf.expand_dims(tf.convert_to_tensor(prev_state), 0)
-            action = policy(tf_prev_state, ou_noise)
-    
-            # Recieve state and reward from environment.
-            # 'step_minus_euclidean_square' is e^2
-            # 'step_minus_weighted_euclidean' is 0.7*e
-            # 'step_error_comparison' is -1.00 or -0.50 or 1.00
-            # 'step_distance_based' is du-1 - du
-            state, reward, done, info = env.step(action[0], reward_function = config['reward']['function'])
-            
+            action = _policy_impl(
+                tf_prev_state,
+                noise,
+                actor_model,
+                lower_bound=lower_bound,
+                upper_bound=upper_bound,
+                add_noise=True,
+            )
+            step_out = unpack_step_output(env.step(action, reward_function=reward_function))
+            state = step_out.obs
+            reward = step_out.reward
+            done = step_out.terminated or step_out.truncated
+
             buffer.record((prev_state, action, reward, state))
+            batch = buffer.sample()
+            if batch is not None:
+                update_batch(*batch)
+                soft_update(target_actor, actor_model, tau)
+                soft_update(target_critic, critic_model, tau)
+
             episodic_reward += reward
-    
-            buffer.learn()
-            update_target(target_actor.variables, actor_model.variables, tau)
-            update_target(target_critic.variables, critic_model.variables, tau)
-    
-            # End this episode when `done` is True
+            prev_state = state
             if done:
                 counter += 1
                 break
-    
-            prev_state = state
-            # print(prev_state)
-            # # Uncomment below when training in local computer
-            # print("Episode Number {0} and {1}th action".format(ep,i))
-            # print("Goal Position",prev_state[2:4])
-            # # print("Previous Error: {0}, Error: {1}, Current State: {2}".format(env.previous_error, env.error, prev_state)) # for step_1
-            # print("Error: {0}, Current State: {1}".format(math.sqrt(-1*reward), prev_state)) # for step_2
-            # print("Action: {0},  Kappas {1}".format(action, [env.kappa1,env.kappa2,env.kappa3]))
-            # print("Reward is ", reward)
-            # print("{0} times robot reached to the target".format(counter))
-            # print("Avg Reward is {0}, Episodic Reward is {1}".format(avg_reward,episodic_reward))
-            # print("--------------------------------------------------------------------------------")
-    
-        ep_reward_list.append(episodic_reward)
-    
-        # Mean of 250 episodes
-        avg_reward = np.mean(ep_reward_list[-250:])
-        if ep % 1 == 0:
-            print("Episode * {} * Avg Reward is ==> {}".format(ep, avg_reward))
-            # time.sleep(0.5)
+
+        ep_reward_list.append(float(episodic_reward))
+        avg_reward = float(np.mean(ep_reward_list[-250:]))
         avg_reward_list.append(avg_reward)
+        print(f"Episode * {ep} * Avg Reward is ==> {avg_reward}")
 
-        if ep % 1000 == 0:
-            # Save Weights
-            actor_model.save_weights(f"experiment/continuum_actor_{env.num_obstacles}.h5")
-            critic_model.save_weights(f"experiment/continuum_critic_{env.num_obstacles}.h5")
-            target_actor.save_weights(f"experiment/continuum_target_actor_{env.num_obstacles}.h5")
-            target_critic.save_weights(f"experiment/continuum_target_critic_{env.num_obstacles}.h5")
-    
-    print(f'{counter} times robot reached the target point in total {total_episodes} episodes')
-    # # Plotting graph
-    # # Episodes versus Avg. Rewards
-    # plt.subplot(1, 2, 1)
-    # plt.plot(np.arange(1, len(avg_reward_list)+1), avg_reward_list)
-    # plt.xlabel("Episode")
-    # plt.ylabel("Avg. Epsiodic Reward")
-
-    with open('avg_reward_list.pickle', 'wb') as f:
-        # Pickle the 'data' dictionary using the highest protocol available.
-        pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
-    
-    # # Episodes versus Rewards
-    # plt.subplot(1, 2, 2)
-    # plt.plot(np.arange(1, len(ep_reward_list)+1), ep_reward_list)
-    # plt.xlabel('Episode')
-    # plt.ylabel('Average Reward')
-    # plt.show()
-
-    with open('ep_reward_list.pickle', 'wb') as f:
-        # Pickle the 'data' dictionary using the highest protocol available.
-        pickle.dump(ep_reward_list, f, pickle.HIGHEST_PROTOCOL)
-    
+    print(f"{counter} times robot reached the target point in total {total_episodes} episodes")
     end_time = time.time() - start_time
-    print('Total Overshoot 0: ', env.overshoot0)
-    print('Total Overshoot 1: ', env.overshoot1)
-    print(f'Total Elapsed Time is {int(end_time)/60} minutes')
-else:
-    actor_model.load_weights(f"../Keras/{config['goal_type']}/{config['reward']['file']}/model/continuum_actor.h5")
-    critic_model.load_weights(f"../Keras/{config['goal_type']}/{config['reward']['file']}/model/continuum_critic.h5")
-    target_actor.load_weights(f"../Keras/{config['goal_type']}/{config['reward']['file']}/model/continuum_target_actor.h5")
-    target_critic.load_weights(f"../Keras/{config['goal_type']}/{config['reward']['file']}/model/continuum_target_critic.h5")
-    
-    # state = env.reset() # generate random starting point for the robot and random target point.
-    # env.start_kappa = [env.kappa1, env.kappa2, env.kappa3] # save starting kappas
-    # x_pos = []
-    # y_pos = []
-    # i = 0
-    # # while True:
-    # for i in range(750):
-    
-    #     tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
-    #     action = policy(tf_prev_state, ou_noise, add_noise = False) # policyde noise'i evaluate ederken 0 yap
-    #     # Recieve state and reward from environment.
-    #     # state, reward, done, info = env.step_1(action) # reward is -1 or 0 or 1
-    #     state, reward, done, info = env.step_2(action[0]) # reward is -(e^2)
-    #     x_pos.append(state[0])
-    #     y_pos.append(state[1])
-    #     # buffer.record((prev_state, action, reward, state))
-    #     # buffer.learn()
-    #     # update_target(target_actor.variables, actor_model.variables, tau)
-    #     # update_target(target_critic.variables, critic_model.variables, tau)
-    
-    #     # print(prev_state)
-    #     print("{}th action".format(i))
-    #     print("Goal Position",state[2:4])
-    #     # print("Previous Error: {0}, Error: {1}, Current State: {2}".format(env.previous_error, env.error, prev_state)) # for step_1
-    #     print("Error: {0}, Current State: {1}".format(math.sqrt(-1*reward), state)) # for step_2
-    #     print("Action: {0},  Kappas {1}".format(action, [env.kappa1,env.kappa2,env.kappa3]))
-    #     print("Reward is ", reward)
-    #     print("--------------------------------------------------------------------------------")
-        
-    #     # End this episode when `done` is True
-    #     if done:
-    #         break
-    
-    # time.sleep(2)
-    # # Visualization
-    # env.render(x_pos,y_pos)
-    # plt.title("Trajectory of the Continuum Robot")
-    # plt.xlabel("X - Position")
-    # plt.ylabel("Y - Position")
-    # plt.show()
-    # env.close()
+    print("Total Overshoot 0: ", env.overshoot0)
+    print("Total Overshoot 1: ", env.overshoot1)
+    print(f"Total Elapsed Time is {int(end_time)/60} minutes")
+
+    _save_weights(
+        actor_model=actor_model,
+        critic_model=critic_model,
+        target_actor=target_actor,
+        target_critic=target_critic,
+        env=env,
+        goal_type=goal_type,
+        reward_file=reward_file,
+        reward_function=reward_function,
+        ep_reward_list=ep_reward_list,
+        avg_reward_list=avg_reward_list,
+    )
+    return ep_reward_list
+
+
+def evaluate_smoke(
+    checkpoint_actor: Path,
+    observation_mode: str = "canonical",
+    goal_type: str = "fixed_goal",
+    reward_function: str = "step_minus_weighted_euclidean",
+    max_steps: int = 20,
+) -> float:
+    env = ContinuumEnv(observation_mode=observation_mode, goal_type=goal_type)
+    num_states = env.obs_size
+    num_actions = env.action_space.shape[0]
+    upper_bound = float(env.action_space.high[0])
+    lower_bound = float(env.action_space.low[0])
+
+    expected = _expected_metadata(env, goal_type, "manual", reward_function)
+    validate_checkpoint_compatibility(checkpoint_actor, expected)
+    resolved_actor = _resolve_weights_path(checkpoint_actor)
+    metadata = read_metadata(resolved_actor)
+    actor_model = (
+        get_actor(num_states, num_actions, upper_bound)
+        if metadata
+        else _build_actor_from_legacy_weights(resolved_actor, upper_bound)
+    )
+    actor_model.load_weights(resolved_actor)
+
+    noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(0.3) * np.ones(num_actions))
+    state, _ = env.reset()
+    total_reward = 0.0
+    for _ in range(max_steps):
+        tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
+        action = _policy_impl(
+            tf_prev_state,
+            noise,
+            actor_model,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            add_noise=False,
+        )
+        step_out = unpack_step_output(env.step(action, reward_function=reward_function))
+        state = step_out.obs
+        total_reward += step_out.reward
+        if step_out.terminated or step_out.truncated:
+            break
+    print(f"Keras smoke eval finished, total_reward={total_reward:.3f}")
+    return total_reward
+
+
+# Backward-compatible globals for legacy demo scripts.
+_preview_env = ContinuumEnv(observation_mode="canonical", goal_type=config.get("goal_type", "fixed_goal"))
+num_states = _preview_env.obs_size
+num_actions = _preview_env.action_space.shape[0]
+upper_bound = float(_preview_env.action_space.high[0])
+lower_bound = float(_preview_env.action_space.low[0])
+actor_model = get_actor(num_states, num_actions, upper_bound)
+
+
+def policy_legacy(state, noise_object, add_noise=True):
+    action = _policy_impl(
+        state=state,
+        noise_object=noise_object,
+        actor=actor_model,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        add_noise=add_noise,
+    )
+    return [np.squeeze(action)]
+
+
+# Preserve historical symbol name used by existing scripts.
+policy = policy_legacy
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Keras DDPG runner for continuum RL.")
+    parser.add_argument("--mode", choices=["train", "eval-smoke"], default="train")
+    parser.add_argument("--episodes", type=int, default=500)
+    parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="canonical")
+    parser.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default=config.get("goal_type", "fixed_goal"))
+    parser.add_argument("--reward-function", default=config.get("reward", {}).get("function", "step_minus_weighted_euclidean"))
+    parser.add_argument("--reward-file", default=config.get("reward", {}).get("file", "reward_step_minus_weighted_euclidean"))
+    parser.add_argument("--checkpoint-actor", type=Path, default=None)
+    return parser.parse_args()
+
+
+def _resolve_weights_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    if path.suffix == ".h5":
+        alt = path.with_name(path.stem + ".weights.h5")
+        if alt.exists():
+            return alt
+    raise FileNotFoundError(f"Checkpoint not found: {path}")
+
+
+def main() -> None:
+    args = parse_args()
+    if args.mode == "train":
+        train(
+            total_episodes=args.episodes,
+            max_steps=args.max_steps,
+            observation_mode=args.observation_mode,
+            goal_type=args.goal_type,
+            reward_function=args.reward_function,
+            reward_file=args.reward_file,
+        )
+        return
+
+    actor = args.checkpoint_actor or (
+        BASE_DIR / args.goal_type / args.reward_file / "model" / "continuum_actor.h5"
+    )
+    evaluate_smoke(
+        checkpoint_actor=actor,
+        observation_mode=args.observation_mode,
+        goal_type=args.goal_type,
+        reward_function=args.reward_function,
+        max_steps=min(args.max_steps, 100),
+    )
+
+
+if __name__ == "__main__":
+    main()

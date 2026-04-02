@@ -1,16 +1,17 @@
 #!/bin/bash
-#SBATCH -p all # partition (queue).
-#SBATCH -N 1 # number of nodes
-#SBATCH -n 8
-#SBATCH --gres=gpu:01
-#SBATCH -w xeon-09
+#SBATCH -p dgx # partition (queue). #SBATCH -w dgx2
+#SBATCH --qos=quick
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=64G
+#SBATCH --ntasks=1
 #SBATCH --job-name=train
-#SBATCH --output=results_train.txt
+#SBATCH --time=24:00:00 # time (D-HH:MM)
+#SBATCH --output=results.txt
 #SBATCH --error=errors.txt
 
 conda init bash
-source ~/miniconda3/etc/profile.d/conda.sh
+source /shared/results/common/kargin/tck_miniconda3/etc/profile.d/conda.sh
 conda activate continuum-rl
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CONDA_PREFIX/lib/
 
-python DDPG.py
+python -m Keras.DDPG --mode train
