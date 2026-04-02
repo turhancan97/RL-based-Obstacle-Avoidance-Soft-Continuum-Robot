@@ -13,13 +13,11 @@ def build_parser() -> argparse.ArgumentParser:
     pytorch_train.add_argument("--episodes", type=int, default=300)
     pytorch_train.add_argument("--max-t", type=int, default=750)
     pytorch_train.add_argument("--print-every", type=int, default=25)
-    pytorch_train.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="canonical")
     pytorch_train.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
     pytorch_train.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     pytorch_train.add_argument("--reward-file", default="reward_step_minus_weighted_euclidean")
 
     pytorch_eval = subparsers.add_parser("pytorch-eval-smoke", help="Run PyTorch smoke evaluation.")
-    pytorch_eval.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="legacy4d")
     pytorch_eval.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
     pytorch_eval.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     pytorch_eval.add_argument("--max-t", type=int, default=20)
@@ -29,13 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     keras_train = subparsers.add_parser("keras-train", help="Train Keras DDPG.")
     keras_train.add_argument("--episodes", type=int, default=500)
     keras_train.add_argument("--max-steps", type=int, default=500)
-    keras_train.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="canonical")
     keras_train.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
     keras_train.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     keras_train.add_argument("--reward-file", default="reward_step_minus_weighted_euclidean")
 
     keras_eval = subparsers.add_parser("keras-eval-smoke", help="Run Keras smoke evaluation.")
-    keras_eval.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="legacy4d")
     keras_eval.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
     keras_eval.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     keras_eval.add_argument("--max-steps", type=int, default=20)
@@ -55,7 +51,6 @@ def main() -> None:
             n_episodes=args.episodes,
             max_t=args.max_t,
             print_every=args.print_every,
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             reward_file=args.reward_file,
@@ -69,7 +64,6 @@ def main() -> None:
         evaluate_smoke(
             checkpoint_actor=Path(args.checkpoint_actor),
             checkpoint_critic=Path(args.checkpoint_critic),
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             max_t=args.max_t,
@@ -82,7 +76,6 @@ def main() -> None:
         train(
             total_episodes=args.episodes,
             max_steps=args.max_steps,
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             reward_file=args.reward_file,
@@ -95,7 +88,6 @@ def main() -> None:
 
         evaluate_smoke(
             checkpoint_actor=Path(args.checkpoint_actor),
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             max_steps=args.max_steps,

@@ -61,7 +61,7 @@ def validate_metadata(
         mismatch_text = "; ".join(mismatches)
         raise ValueError(
             f"Artifact compatibility check failed for '{artifact_path}'. {mismatch_text}. "
-            "Use legacy4d mode or a matching v2 checkpoint."
+            "Use a matching canonical-mode v2 checkpoint."
         )
 
     return metadata

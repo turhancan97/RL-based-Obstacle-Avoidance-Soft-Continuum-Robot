@@ -30,9 +30,8 @@ The repository now uses a compatibility-first runtime:
 
 - Canonical env class: `continuum_rl.env.ContinuumEnv`
 - Backward alias: `continuum_rl.env.continuumEnv`
-- Observation modes:
-  - `canonical` (default): `4 + 2 * obstacle_count` features
-  - `legacy4d`: 4 features (`x, y, goal_x, goal_y`) for old checkpoints
+- Observation mode:
+  - `canonical` only: `4 + 2 * obstacle_count` features
 - Goal modes:
   - `fixed_goal`
   - `random_goal`
@@ -59,7 +58,6 @@ python run.py pytorch-train \
   --episodes 300 \
   --max-t 750 \
   --print-every 25 \
-  --observation-mode canonical \
   --goal-type fixed_goal \
   --reward-function step_minus_weighted_euclidean \
   --reward-file reward_step_minus_weighted_euclidean
@@ -71,7 +69,6 @@ python run.py pytorch-train \
 python run.py keras-train \
   --episodes 500 \
   --max-steps 500 \
-  --observation-mode canonical \
   --goal-type fixed_goal \
   --reward-function step_minus_weighted_euclidean \
   --reward-file reward_step_minus_weighted_euclidean
@@ -85,7 +82,6 @@ Smoke eval runs a short rollout and checks checkpoint/runtime compatibility.
 
 ```bash
 python run.py pytorch-eval-smoke \
-  --observation-mode legacy4d \
   --goal-type fixed_goal \
   --reward-function step_minus_weighted_euclidean \
   --max-t 20 \
@@ -97,7 +93,6 @@ python run.py pytorch-eval-smoke \
 
 ```bash
 python run.py keras-eval-smoke \
-  --observation-mode legacy4d \
   --goal-type fixed_goal \
   --reward-function step_minus_weighted_euclidean \
   --max-steps 20 \
@@ -109,8 +104,8 @@ python run.py keras-eval-smoke \
 ### 3) Quick sanity runs
 
 ```bash
-python run.py pytorch-train --episodes 1 --max-t 1 --observation-mode legacy4d
-python run.py keras-train --episodes 1 --max-steps 1 --observation-mode legacy4d
+python run.py pytorch-train --episodes 1 --max-t 1
+python run.py keras-train --episodes 1 --max-steps 1
 ```
 
 ## Reward Functions
@@ -126,13 +121,12 @@ Set with `--reward-function ...` and choose a matching `--reward-file ...`.
 
 ## Output Artifacts
 
-Training writes outputs in both new and legacy-compatible locations.
+Training writes outputs to a single canonical location per framework.
 
 ### PyTorch
 
-- v2 model: `Pytorch/v2/<goal_type>/<reward_file>/model/`
-- v2 rewards: `Pytorch/v2/<goal_type>/<reward_file>/rewards/`
-- legacy-compatible model/rewards: `Pytorch/experiment/`
+- model: `Pytorch/<goal_type>/<reward_file>/model/`
+- rewards: `Pytorch/<goal_type>/<reward_file>/rewards/`
 - files:
   - `checkpoint_actor.pth`
   - `checkpoint_critic.pth`
@@ -140,9 +134,8 @@ Training writes outputs in both new and legacy-compatible locations.
 
 ### Keras
 
-- v2 model: `Keras/v2/<goal_type>/<reward_file>/model/`
-- v2 rewards: `Keras/v2/<goal_type>/<reward_file>/rewards/`
-- legacy-compatible model/rewards: `Keras/experiment/`
+- model: `Keras/<goal_type>/<reward_file>/model/`
+- rewards: `Keras/<goal_type>/<reward_file>/rewards/`
 - files:
   - `continuum_actor.weights.h5`
   - `continuum_critic.weights.h5`
@@ -150,7 +143,7 @@ Training writes outputs in both new and legacy-compatible locations.
   - `continuum_target_critic.weights.h5`
   - metadata sidecars: `*.metadata.json`
 
-## Legacy / Direct Module Entry Points
+## Direct Module Entry Points
 
 You can still run framework modules directly:
 
@@ -179,7 +172,7 @@ python -m Keras.reward_visualization.reward_vis
 These scripts auto-detect available reward folders when the configured folder is missing.
 Saved plots are written to `<reward_dir>/plots/`.
 
-### Legacy interactive demos
+### Interactive demos
 
 These are explicit demo scripts (not collected by pytest):
 
@@ -212,8 +205,7 @@ obs, info = env.reset(seed=0)
 ## Troubleshooting
 
 - Checkpoint mismatch error (`state_dim` mismatch):
-  - Use `--observation-mode legacy4d` for old 4D checkpoints.
-  - Or use checkpoints trained with matching mode.
+  - Use checkpoints trained in canonical mode.
 - Missing reward folder for visualization:
   - The reward-vis scripts print available folder candidates.
 - Gym/Gymnasium differences:

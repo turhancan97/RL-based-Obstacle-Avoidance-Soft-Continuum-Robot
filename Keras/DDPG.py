@@ -97,7 +97,7 @@ def get_actor(num_states: int, num_actions: int, upper_bound: float):
     return tf.keras.Model(inputs, outputs)
 
 
-def _build_actor_from_legacy_weights(checkpoint_path: Path, upper_bound: float) -> tf.keras.Model:
+def _build_actor_from_checkpoint_shapes(checkpoint_path: Path, upper_bound: float) -> tf.keras.Model:
     kernels: list[tuple[str, tuple[int, int]]] = []
     with h5py.File(checkpoint_path, "r") as f:
         def _collect(name, obj):
@@ -106,7 +106,7 @@ def _build_actor_from_legacy_weights(checkpoint_path: Path, upper_bound: float) 
         f.visititems(_collect)
 
     if not kernels:
-        raise ValueError(f"No dense kernel tensors found in legacy checkpoint '{checkpoint_path}'.")
+        raise ValueError(f"No dense kernel tensors found in checkpoint '{checkpoint_path}'.")
 
     def _kernel_sort_key(item: tuple[str, tuple[int, int]]):
         name = item[0].split("/")[0]
@@ -201,12 +201,12 @@ def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str,
                         actual_state_dim = int(obj.shape[0])
                 f.visititems(_finder)
         if actual_state_dim is None:
-            raise ValueError(f"Unable to infer state_dim for legacy checkpoint '{checkpoint_path}'.")
+            raise ValueError(f"Unable to infer state_dim for checkpoint '{checkpoint_path}'.")
 
     if actual_state_dim != expected["state_dim"]:
         raise ValueError(
             f"Checkpoint incompatible: expected state_dim={expected['state_dim']}, actual={actual_state_dim}. "
-            "Use --observation-mode legacy4d or regenerate v2 checkpoint."
+            "Regenerate checkpoint in canonical mode."
         )
 
 
@@ -224,11 +224,11 @@ def _save_weights(
 ) -> None:
     metadata = _expected_metadata(env, goal_type, reward_file, reward_function)
 
-    v2_model_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "model")
-    actor_path = v2_model_dir / "continuum_actor.weights.h5"
-    critic_path = v2_model_dir / "continuum_critic.weights.h5"
-    target_actor_path = v2_model_dir / "continuum_target_actor.weights.h5"
-    target_critic_path = v2_model_dir / "continuum_target_critic.weights.h5"
+    model_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "model")
+    actor_path = model_dir / "continuum_actor.weights.h5"
+    critic_path = model_dir / "continuum_critic.weights.h5"
+    target_actor_path = model_dir / "continuum_target_actor.weights.h5"
+    target_critic_path = model_dir / "continuum_target_critic.weights.h5"
 
     actor_model.save_weights(actor_path)
     critic_model.save_weights(critic_path)
@@ -237,38 +237,24 @@ def _save_weights(
     for p in (actor_path, critic_path, target_actor_path, target_critic_path):
         write_metadata(p, metadata)
 
-    v2_rewards_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "rewards")
+    rewards_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "rewards")
     if ep_reward_list is not None:
-        with (v2_rewards_dir / "ep_reward_list.pickle").open("wb") as f:
+        with (rewards_dir / "ep_reward_list.pickle").open("wb") as f:
             pickle.dump(ep_reward_list, f, pickle.HIGHEST_PROTOCOL)
     if avg_reward_list is not None:
-        with (v2_rewards_dir / "avg_reward_list.pickle").open("wb") as f:
+        with (rewards_dir / "avg_reward_list.pickle").open("wb") as f:
             pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
-
-    # Legacy compatibility outputs.
-    legacy_dir = ensure_dir(BASE_DIR / "experiment")
-    legacy_actor = legacy_dir / "continuum_actor.weights.h5"
-    legacy_critic = legacy_dir / "continuum_critic.weights.h5"
-    legacy_target_actor = legacy_dir / "continuum_target_actor.weights.h5"
-    legacy_target_critic = legacy_dir / "continuum_target_critic.weights.h5"
-    actor_model.save_weights(legacy_actor)
-    critic_model.save_weights(legacy_critic)
-    target_actor.save_weights(legacy_target_actor)
-    target_critic.save_weights(legacy_target_critic)
-    for p in (legacy_actor, legacy_critic, legacy_target_actor, legacy_target_critic):
-        write_metadata(p, metadata)
 
 
 def train(
     total_episodes: int = 500,
     max_steps: int = 500,
-    observation_mode: str = "canonical",
     goal_type: str = "fixed_goal",
     reward_function: str = "step_minus_weighted_euclidean",
     reward_file: str = "reward_step_minus_weighted_euclidean",
 ) -> list[float]:
     start_time = time.time()
-    env = ContinuumEnv(observation_mode=observation_mode, goal_type=goal_type)
+    env = ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
     upper_bound = float(env.action_space.high[0])
@@ -374,12 +360,11 @@ def train(
 
 def evaluate_smoke(
     checkpoint_actor: Path,
-    observation_mode: str = "canonical",
     goal_type: str = "fixed_goal",
     reward_function: str = "step_minus_weighted_euclidean",
     max_steps: int = 20,
 ) -> float:
-    env = ContinuumEnv(observation_mode=observation_mode, goal_type=goal_type)
+    env = ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
     upper_bound = float(env.action_space.high[0])
@@ -392,7 +377,7 @@ def evaluate_smoke(
     actor_model = (
         get_actor(num_states, num_actions, upper_bound)
         if metadata
-        else _build_actor_from_legacy_weights(resolved_actor, upper_bound)
+        else _build_actor_from_checkpoint_shapes(resolved_actor, upper_bound)
     )
     actor_model.load_weights(resolved_actor)
 
@@ -418,7 +403,7 @@ def evaluate_smoke(
     return total_reward
 
 
-# Backward-compatible globals for legacy demo scripts.
+# Backward-compatible globals for demo scripts.
 _preview_env = ContinuumEnv(observation_mode="canonical", goal_type=config.get("goal_type", "fixed_goal"))
 num_states = _preview_env.obs_size
 num_actions = _preview_env.action_space.shape[0]
@@ -427,7 +412,7 @@ lower_bound = float(_preview_env.action_space.low[0])
 actor_model = get_actor(num_states, num_actions, upper_bound)
 
 
-def policy_legacy(state, noise_object, add_noise=True):
+def policy_for_demo(state, noise_object, add_noise=True):
     action = _policy_impl(
         state=state,
         noise_object=noise_object,
@@ -440,7 +425,7 @@ def policy_legacy(state, noise_object, add_noise=True):
 
 
 # Preserve historical symbol name used by existing scripts.
-policy = policy_legacy
+policy = policy_for_demo
 
 
 def parse_args() -> argparse.Namespace:
@@ -448,7 +433,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["train", "eval-smoke"], default="train")
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="canonical")
     parser.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default=config.get("goal_type", "fixed_goal"))
     parser.add_argument("--reward-function", default=config.get("reward", {}).get("function", "step_minus_weighted_euclidean"))
     parser.add_argument("--reward-file", default=config.get("reward", {}).get("file", "reward_step_minus_weighted_euclidean"))
@@ -472,7 +456,6 @@ def main() -> None:
         train(
             total_episodes=args.episodes,
             max_steps=args.max_steps,
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             reward_file=args.reward_file,
@@ -484,7 +467,6 @@ def main() -> None:
     )
     evaluate_smoke(
         checkpoint_actor=actor,
-        observation_mode=args.observation_mode,
         goal_type=args.goal_type,
         reward_function=args.reward_function,
         max_steps=min(args.max_steps, 100),

@@ -12,14 +12,11 @@ def test_cli_parses_pytorch_train():
             "2",
             "--max-t",
             "3",
-            "--observation-mode",
-            "legacy4d",
         ]
     )
     assert args.command == "pytorch-train"
     assert args.episodes == 2
     assert args.max_t == 3
-    assert args.observation_mode == "legacy4d"
 
 
 def test_cli_parses_keras_eval():

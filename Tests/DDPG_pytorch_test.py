@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import torch
+
+if __package__ in (None, ""):
+    from _bootstrap import ensure_repo_root_on_path
+else:
+    from ._bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from continuum_rl.env import ContinuumEnv
 from continuum_rl.gym_compat import unpack_step_output
@@ -17,7 +26,7 @@ from Pytorch.ddpg_agent import Agent
 def main() -> None:
     output_dir = Path(__file__).resolve().parent / "visualizations"
     output_dir.mkdir(parents=True, exist_ok=True)
-    env = ContinuumEnv(observation_mode="legacy4d", goal_type=config["goal_type"])
+    env = ContinuumEnv(observation_mode="canonical", goal_type=config["goal_type"])
     agent = Agent(state_size=env.obs_size, action_size=3, random_seed=10)
 
     checkpoint_actor = Path(

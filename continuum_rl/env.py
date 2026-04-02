@@ -21,7 +21,7 @@ from kinematics.forward_velocity_kinematics import (
 from .gym_compat import gym, spaces
 from .spaces import AmorphousSpace
 
-ObservationMode = Literal["canonical", "legacy4d"]
+ObservationMode = Literal["canonical"]
 GoalType = Literal["fixed_goal", "random_goal"]
 
 
@@ -51,8 +51,11 @@ class ContinuumEnv(gym.Env):
         fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2),
         random_goal_range: tuple[float, float] = (-4.0, 16.0),
     ):
-        if observation_mode not in {"canonical", "legacy4d"}:
-            raise ValueError(f"Unsupported observation_mode={observation_mode}.")
+        if observation_mode != "canonical":
+            raise ValueError(
+                f"Unsupported observation_mode={observation_mode}. "
+                "Only canonical mode is supported."
+            )
         if goal_type not in {"fixed_goal", "random_goal"}:
             raise ValueError(f"Unsupported goal_type={goal_type}.")
 
@@ -83,7 +86,7 @@ class ContinuumEnv(gym.Env):
         self.num_obstacles = len(self.obstacles)
         self.workspace = AmorphousSpace()
 
-        self.obs_size = 4 + (2 * self.num_obstacles) if self.config.observation_mode == "canonical" else 4
+        self.obs_size = 4 + (2 * self.num_obstacles)
         obs_bound = 0.5
         self.observation_space = spaces.Box(
             low=-obs_bound,
@@ -111,8 +114,6 @@ class ContinuumEnv(gym.Env):
         self.initial_distance: float | None = None
 
     def _select_observation(self, full_state: np.ndarray) -> np.ndarray:
-        if self.config.observation_mode == "legacy4d":
-            return full_state[:4].astype(np.float32)
         return full_state.astype(np.float32)
 
     def _compose_full_state(self, x: float, y: float, goal_x: float, goal_y: float) -> np.ndarray:
@@ -304,15 +305,6 @@ class ContinuumEnv(gym.Env):
         obs = self._select_observation(self._full_state)
         info = {"observation_mode": self.config.observation_mode, "goal_type": self.config.goal_type}
         return obs, info
-
-    def reset_legacy(self):
-        obs, _ = self.reset()
-        return obs
-
-    def step_legacy(self, action: Sequence[float], reward_function: str = "step_minus_euclidean_square"):
-        obs, reward, terminated, truncated, info = self.step(action, reward_function=reward_function)
-        done = terminated or truncated
-        return obs, reward, done, info
 
     @property
     def state(self) -> np.ndarray:

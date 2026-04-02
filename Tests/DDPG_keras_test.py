@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import math
 import time
 from pathlib import Path
@@ -9,6 +11,13 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+if __package__ in (None, ""):
+    from _bootstrap import ensure_repo_root_on_path
+else:
+    from ._bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from continuum_rl.env import ContinuumEnv
 from continuum_rl.gym_compat import unpack_step_output
@@ -36,7 +45,7 @@ def main() -> None:
     storage["reward"]["value"] = []
     storage["reward"]["effectiveness"] = []
 
-    env = ContinuumEnv(observation_mode="legacy4d", goal_type=config["goal_type"])
+    env = ContinuumEnv(observation_mode="canonical", goal_type=config["goal_type"])
     state, _ = env.reset()
     env.time = 0
     env.start_kappa = [env.kappa1, env.kappa2, env.kappa3]
@@ -54,7 +63,6 @@ def main() -> None:
     validate_checkpoint_compatibility(checkpoint_actor, expected)
     evaluate_smoke(
         checkpoint_actor=checkpoint_actor,
-        observation_mode="legacy4d",
         goal_type=config["goal_type"],
         reward_function=config["reward"]["function"],
         max_steps=1,

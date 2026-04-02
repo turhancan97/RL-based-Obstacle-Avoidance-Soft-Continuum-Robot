@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from continuum_rl.env import ContinuumEnv
 
@@ -14,12 +15,9 @@ def test_canonical_observation_contract():
     assert env.observation_space.contains(obs)
 
 
-def test_legacy4d_observation_contract():
-    env = ContinuumEnv(observation_mode="legacy4d", goal_type="fixed_goal")
-    obs, _ = env.reset(seed=0)
-    assert obs.shape == (4,)
-    assert env.obs_size == 4
-    assert env.observation_space.contains(obs)
+def test_non_canonical_mode_rejected():
+    with pytest.raises(ValueError, match="Only canonical mode is supported"):
+        ContinuumEnv(observation_mode="legacy4d", goal_type="fixed_goal")
 
 
 def test_stop_7_branch_does_not_crash():

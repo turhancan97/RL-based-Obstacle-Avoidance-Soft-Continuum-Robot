@@ -65,22 +65,22 @@ def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str,
         if expected_state_dim != actual_state_dim:
             raise ValueError(
                 f"Checkpoint incompatible: expected state_dim={expected_state_dim}, "
-                f"actual={actual_state_dim}. Use --observation-mode legacy4d or a matching checkpoint."
+                f"actual={actual_state_dim}. Use a checkpoint trained in canonical mode."
             )
         return
 
-    # Legacy checkpoint without metadata.
+    # Checkpoint without metadata.
     actual_state_dim = _infer_state_dim_from_checkpoint(checkpoint_path)
     expected_state_dim = expected["state_dim"]
     if actual_state_dim != expected_state_dim:
         raise ValueError(
-            f"Legacy checkpoint incompatible: expected state_dim={expected_state_dim}, actual={actual_state_dim}. "
-            "Use --observation-mode legacy4d or regenerate v2 checkpoints."
+            f"Checkpoint incompatible: expected state_dim={expected_state_dim}, actual={actual_state_dim}. "
+            "Regenerate checkpoints in canonical mode."
         )
 
 
-def _make_env(observation_mode: str, goal_type: str) -> ContinuumEnv:
-    return ContinuumEnv(observation_mode=observation_mode, goal_type=goal_type)
+def _make_env(goal_type: str) -> ContinuumEnv:
+    return ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
 
 
 def _save_checkpoints(
@@ -92,39 +92,22 @@ def _save_checkpoints(
     scores: list[float] | None = None,
     avg_reward_list: list[float] | None = None,
 ) -> None:
-    # New canonical v2 output path.
-    v2_model_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "model")
-    actor_v2 = v2_model_dir / "checkpoint_actor.pth"
-    critic_v2 = v2_model_dir / "checkpoint_critic.pth"
-    torch.save(agent.actor_local.state_dict(), actor_v2)
-    torch.save(agent.critic_local.state_dict(), critic_v2)
+    model_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "model")
+    actor_path = model_dir / "checkpoint_actor.pth"
+    critic_path = model_dir / "checkpoint_critic.pth"
+    torch.save(agent.actor_local.state_dict(), actor_path)
+    torch.save(agent.critic_local.state_dict(), critic_path)
 
     metadata = _expected_metadata(env, goal_type, reward_file, reward_function)
-    write_metadata(actor_v2, metadata)
-    write_metadata(critic_v2, metadata)
+    write_metadata(actor_path, metadata)
+    write_metadata(critic_path, metadata)
 
-    v2_rewards_dir = ensure_dir(BASE_DIR / "v2" / goal_type / reward_file / "rewards")
+    rewards_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "rewards")
     if scores is not None:
-        with (v2_rewards_dir / "scores.pickle").open("wb") as f:
+        with (rewards_dir / "scores.pickle").open("wb") as f:
             pickle.dump(scores, f, pickle.HIGHEST_PROTOCOL)
     if avg_reward_list is not None:
-        with (v2_rewards_dir / "avg_reward_list.pickle").open("wb") as f:
-            pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
-
-    # Legacy compatibility output path.
-    legacy_model_dir = ensure_dir(BASE_DIR / "experiment")
-    legacy_actor = legacy_model_dir / "checkpoint_actor.pth"
-    legacy_critic = legacy_model_dir / "checkpoint_critic.pth"
-    torch.save(agent.actor_local.state_dict(), legacy_actor)
-    torch.save(agent.critic_local.state_dict(), legacy_critic)
-    write_metadata(legacy_actor, metadata)
-    write_metadata(legacy_critic, metadata)
-
-    if scores is not None:
-        with (legacy_model_dir / "scores.pickle").open("wb") as f:
-            pickle.dump(scores, f, pickle.HIGHEST_PROTOCOL)
-    if avg_reward_list is not None:
-        with (legacy_model_dir / "avg_reward_list.pickle").open("wb") as f:
+        with (rewards_dir / "avg_reward_list.pickle").open("wb") as f:
             pickle.dump(avg_reward_list, f, pickle.HIGHEST_PROTOCOL)
 
 
@@ -132,13 +115,12 @@ def train(
     n_episodes: int = 300,
     max_t: int = 750,
     print_every: int = 25,
-    observation_mode: str = "canonical",
     goal_type: str = "fixed_goal",
     reward_function: str = "step_minus_weighted_euclidean",
     reward_file: str = "reward_step_minus_weighted_euclidean",
 ) -> list[float]:
     start_time = time.time()
-    env = _make_env(observation_mode=observation_mode, goal_type=goal_type)
+    env = _make_env(goal_type=goal_type)
     agent = Agent(state_size=env.obs_size, action_size=3, random_seed=10)
 
     scores_deque = deque(maxlen=print_every)
@@ -200,12 +182,11 @@ def train(
 def evaluate_smoke(
     checkpoint_actor: Path,
     checkpoint_critic: Path,
-    observation_mode: str = "canonical",
     goal_type: str = "fixed_goal",
     reward_function: str = "step_minus_weighted_euclidean",
     max_t: int = 20,
 ) -> float:
-    env = _make_env(observation_mode=observation_mode, goal_type=goal_type)
+    env = _make_env(goal_type=goal_type)
     expected = _expected_metadata(env, goal_type, "manual", reward_function)
     validate_checkpoint_compatibility(checkpoint_actor, expected)
     validate_checkpoint_compatibility(checkpoint_critic, expected)
@@ -233,7 +214,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=300)
     parser.add_argument("--max-t", type=int, default=750)
     parser.add_argument("--print-every", type=int, default=25)
-    parser.add_argument("--observation-mode", choices=["canonical", "legacy4d"], default="canonical")
     parser.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default=config.get("goal_type", "fixed_goal"))
     parser.add_argument("--reward-function", default=config.get("reward", {}).get("function", "step_minus_weighted_euclidean"))
     parser.add_argument("--reward-file", default=config.get("reward", {}).get("file", "reward_step_minus_weighted_euclidean"))
@@ -249,7 +229,6 @@ def main() -> None:
             n_episodes=args.episodes,
             max_t=args.max_t,
             print_every=args.print_every,
-            observation_mode=args.observation_mode,
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             reward_file=args.reward_file,
@@ -261,7 +240,6 @@ def main() -> None:
     evaluate_smoke(
         checkpoint_actor=actor,
         checkpoint_critic=critic,
-        observation_mode=args.observation_mode,
         goal_type=args.goal_type,
         reward_function=args.reward_function,
         max_t=min(args.max_t, 100),

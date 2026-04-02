@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+
+if __package__ in (None, ""):
+    from _bootstrap import ensure_repo_root_on_path
+else:
+    from ._bootstrap import ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from continuum_rl.spaces import AmorphousSpace
 
