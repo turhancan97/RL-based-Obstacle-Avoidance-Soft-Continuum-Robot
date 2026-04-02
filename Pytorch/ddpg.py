@@ -1,17 +1,17 @@
-"""PyTorch DDPG training/evaluation entrypoint (import-safe)."""
+"""PyTorch DDPG training/evaluation module."""
 
 from __future__ import annotations
 
 import argparse
 import pickle
 import time
+import warnings
 from collections import deque
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-import yaml
 
 from continuum_rl.artifacts import ARTIFACT_VERSION, ensure_dir, read_metadata, write_metadata
 from continuum_rl.env import ContinuumEnv
@@ -24,18 +24,32 @@ except ImportError:  # script mode
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = BASE_DIR / "config.yaml"
+DEFAULT_GOAL_TYPE = "fixed_goal"
+DEFAULT_REWARD_FUNCTION = "step_minus_weighted_euclidean"
+DEFAULT_REWARD_FILE = "reward_step_minus_weighted_euclidean"
+
+# Backward-compatible module-level configuration consumed by legacy demo scripts.
+config: dict[str, Any] = {
+    "goal_type": DEFAULT_GOAL_TYPE,
+    "reward": {
+        "function": DEFAULT_REWARD_FUNCTION,
+        "file": DEFAULT_REWARD_FILE,
+    },
+}
 
 
-def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
-    with config_path.open("r", encoding="utf-8") as file:
-        return yaml.safe_load(file)
+def _resolve_output_base_dir(output_base_dir: Path | str | None) -> Path:
+    if output_base_dir is None:
+        return BASE_DIR
+    return Path(output_base_dir)
 
 
-config = load_config()
-
-
-def _expected_metadata(env: ContinuumEnv, goal_type: str, reward_file: str, reward_function: str) -> dict[str, Any]:
+def _expected_metadata(
+    env: ContinuumEnv,
+    goal_type: str,
+    reward_file: str,
+    reward_function: str,
+) -> dict[str, Any]:
     return {
         "framework": "pytorch",
         "artifact_version": ARTIFACT_VERSION,
@@ -69,13 +83,12 @@ def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str,
             )
         return
 
-    # Checkpoint without metadata.
     actual_state_dim = _infer_state_dim_from_checkpoint(checkpoint_path)
     expected_state_dim = expected["state_dim"]
     if actual_state_dim != expected_state_dim:
         raise ValueError(
-            f"Checkpoint incompatible: expected state_dim={expected_state_dim}, actual={actual_state_dim}. "
-            "Regenerate checkpoints in canonical mode."
+            f"Checkpoint incompatible: expected state_dim={expected_state_dim}, "
+            f"actual={actual_state_dim}. Regenerate checkpoints in canonical mode."
         )
 
 
@@ -89,10 +102,11 @@ def _save_checkpoints(
     goal_type: str,
     reward_file: str,
     reward_function: str,
+    output_base_dir: Path,
     scores: list[float] | None = None,
     avg_reward_list: list[float] | None = None,
 ) -> None:
-    model_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "model")
+    model_dir = ensure_dir(output_base_dir / goal_type / reward_file / "model")
     actor_path = model_dir / "checkpoint_actor.pth"
     critic_path = model_dir / "checkpoint_critic.pth"
     torch.save(agent.actor_local.state_dict(), actor_path)
@@ -102,7 +116,7 @@ def _save_checkpoints(
     write_metadata(actor_path, metadata)
     write_metadata(critic_path, metadata)
 
-    rewards_dir = ensure_dir(BASE_DIR / goal_type / reward_file / "rewards")
+    rewards_dir = ensure_dir(output_base_dir / goal_type / reward_file / "rewards")
     if scores is not None:
         with (rewards_dir / "scores.pickle").open("wb") as f:
             pickle.dump(scores, f, pickle.HIGHEST_PROTOCOL)
@@ -115,9 +129,10 @@ def train(
     n_episodes: int = 300,
     max_t: int = 750,
     print_every: int = 25,
-    goal_type: str = "fixed_goal",
-    reward_function: str = "step_minus_weighted_euclidean",
-    reward_file: str = "reward_step_minus_weighted_euclidean",
+    goal_type: str = DEFAULT_GOAL_TYPE,
+    reward_function: str = DEFAULT_REWARD_FUNCTION,
+    reward_file: str = DEFAULT_REWARD_FILE,
+    output_base_dir: Path | str | None = None,
 ) -> list[float]:
     start_time = time.time()
     env = _make_env(goal_type=goal_type)
@@ -147,10 +162,11 @@ def train(
         for _ in range(max_t):
             action = agent.act(state)
             step_out = unpack_step_output(env.step(action, reward_function=reward_function))
-            next_state, reward, done = step_out.obs, step_out.reward, step_out.terminated or step_out.truncated
-            agent.step(state, action, reward, next_state, done)
+            next_state = step_out.obs
+            done = step_out.terminated or step_out.truncated
+            agent.step(state, action, step_out.reward, next_state, done)
             state = next_state
-            score += reward
+            score += step_out.reward
             if done:
                 counter += 1
                 break
@@ -165,7 +181,7 @@ def train(
     end_time = time.time() - start_time
     print("Total Overshoot 0: ", env.overshoot0)
     print("Total Overshoot 1: ", env.overshoot1)
-    print(f"Total Elapsed Time is {int(end_time)/60} minutes")
+    print(f"Total Elapsed Time is {int(end_time) / 60} minutes")
 
     _save_checkpoints(
         agent=agent,
@@ -173,6 +189,7 @@ def train(
         goal_type=goal_type,
         reward_file=reward_file,
         reward_function=reward_function,
+        output_base_dir=_resolve_output_base_dir(output_base_dir),
         scores=scores,
         avg_reward_list=avg_reward_list,
     )
@@ -182,8 +199,8 @@ def train(
 def evaluate_smoke(
     checkpoint_actor: Path,
     checkpoint_critic: Path,
-    goal_type: str = "fixed_goal",
-    reward_function: str = "step_minus_weighted_euclidean",
+    goal_type: str = DEFAULT_GOAL_TYPE,
+    reward_function: str = DEFAULT_REWARD_FUNCTION,
     max_t: int = 20,
 ) -> float:
     env = _make_env(goal_type=goal_type)
@@ -214,16 +231,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=300)
     parser.add_argument("--max-t", type=int, default=750)
     parser.add_argument("--print-every", type=int, default=25)
-    parser.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default=config.get("goal_type", "fixed_goal"))
-    parser.add_argument("--reward-function", default=config.get("reward", {}).get("function", "step_minus_weighted_euclidean"))
-    parser.add_argument("--reward-file", default=config.get("reward", {}).get("file", "reward_step_minus_weighted_euclidean"))
+    parser.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default=DEFAULT_GOAL_TYPE)
+    parser.add_argument("--reward-function", default=DEFAULT_REWARD_FUNCTION)
+    parser.add_argument("--reward-file", default=DEFAULT_REWARD_FILE)
     parser.add_argument("--checkpoint-actor", type=Path, default=None)
     parser.add_argument("--checkpoint-critic", type=Path, default=None)
+    parser.add_argument("--output-base-dir", type=Path, default=BASE_DIR)
     return parser.parse_args()
+
+
+def _warn_deprecated(mode: str) -> None:
+    replacement = (
+        "continuum-rl task=pytorch_train"
+        if mode == "train"
+        else "continuum-rl task=pytorch_eval_smoke"
+    )
+    message = (
+        "DEPRECATION: `python -m Pytorch.ddpg` compatibility mode will be removed in the "
+        "next release milestone. Use `" + replacement + " ...` instead."
+    )
+    warnings.warn(message, DeprecationWarning, stacklevel=2)
+    print(message)
 
 
 def main() -> None:
     args = parse_args()
+    _warn_deprecated(args.mode)
+
     if args.mode == "train":
         train(
             n_episodes=args.episodes,
@@ -232,11 +266,16 @@ def main() -> None:
             goal_type=args.goal_type,
             reward_function=args.reward_function,
             reward_file=args.reward_file,
+            output_base_dir=args.output_base_dir,
         )
         return
 
-    actor = args.checkpoint_actor or (BASE_DIR / args.goal_type / args.reward_file / "model" / "checkpoint_actor.pth")
-    critic = args.checkpoint_critic or (BASE_DIR / args.goal_type / args.reward_file / "model" / "checkpoint_critic.pth")
+    actor = args.checkpoint_actor or (
+        args.output_base_dir / args.goal_type / args.reward_file / "model" / "checkpoint_actor.pth"
+    )
+    critic = args.checkpoint_critic or (
+        args.output_base_dir / args.goal_type / args.reward_file / "model" / "checkpoint_critic.pth"
+    )
     evaluate_smoke(
         checkpoint_actor=actor,
         checkpoint_critic=critic,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from continuum_rl.cli import build_parser
+from continuum_rl import cli
 
 
 def test_cli_parses_pytorch_train():
-    parser = build_parser()
+    parser = cli.build_parser()
     args = parser.parse_args(
         [
             "pytorch-train",
@@ -20,7 +20,7 @@ def test_cli_parses_pytorch_train():
 
 
 def test_cli_parses_keras_eval():
-    parser = build_parser()
+    parser = cli.build_parser()
     args = parser.parse_args(
         [
             "keras-eval-smoke",
@@ -30,3 +30,32 @@ def test_cli_parses_keras_eval():
     )
     assert args.command == "keras-eval-smoke"
     assert args.checkpoint_actor.endswith(".h5")
+
+
+def test_legacy_cli_routes_to_hydra(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run_with_overrides(overrides: list[str]) -> None:
+        captured["overrides"] = overrides
+
+    monkeypatch.setattr(cli, "run_with_overrides", _fake_run_with_overrides)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.py",
+            "pytorch-train",
+            "--episodes",
+            "5",
+            "--max-t",
+            "6",
+            "--goal-type",
+            "random_goal",
+        ],
+    )
+
+    cli.main()
+    overrides = captured["overrides"]
+    assert "task=pytorch_train" in overrides
+    assert "task.episodes=5" in overrides
+    assert "task.max_t=6" in overrides
+    assert "task.goal_type=random_goal" in overrides

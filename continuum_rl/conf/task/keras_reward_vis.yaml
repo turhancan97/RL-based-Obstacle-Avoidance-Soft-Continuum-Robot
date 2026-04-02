@@ -1,0 +1,4 @@
+name: keras_reward_vis
+goal_type: fixed_goal
+reward_type: reward_step_minus_weighted_euclidean
+base_dir: Keras

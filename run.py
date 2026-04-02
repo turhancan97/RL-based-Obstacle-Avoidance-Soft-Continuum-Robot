@@ -1,4 +1,4 @@
-"""Repository root CLI entrypoint."""
+"""Repository root compatibility CLI entrypoint."""
 
 from continuum_rl.cli import main
 

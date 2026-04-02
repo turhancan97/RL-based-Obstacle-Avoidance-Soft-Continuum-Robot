@@ -1,2 +1,0 @@
-goal_type: 'fixed_goal'
-reward_type: 'reward_step_minus_weighted_euclidean'

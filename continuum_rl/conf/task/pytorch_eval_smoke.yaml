@@ -1,0 +1,6 @@
+name: pytorch_eval_smoke
+goal_type: fixed_goal
+reward_function: step_minus_weighted_euclidean
+max_t: 20
+checkpoint_actor: Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth
+checkpoint_critic: Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth

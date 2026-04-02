@@ -1,0 +1,8 @@
+name: pytorch_train
+goal_type: fixed_goal
+reward_function: step_minus_weighted_euclidean
+reward_file: reward_step_minus_weighted_euclidean
+episodes: 300
+max_t: 750
+print_every: 25
+output_base_dir: Pytorch

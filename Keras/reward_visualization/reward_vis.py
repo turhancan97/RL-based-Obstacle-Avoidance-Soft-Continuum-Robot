@@ -2,31 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
-
-import yaml
 
 from continuum_robot.utils import load_pickle_file, reward_log10_visualization, reward_visualization
 
 
 BASE_DIR = Path(__file__).resolve().parent
 KERAS_DIR = BASE_DIR.parent
+DEFAULT_GOAL_TYPE = "fixed_goal"
+DEFAULT_REWARD_TYPE = "reward_step_minus_weighted_euclidean"
 
 
-def _load_config() -> dict:
-    with (BASE_DIR / "config.yaml").open("r", encoding="utf-8") as file:
-        return yaml.safe_load(file)
-
-
-def _resolve_reward_dir(goal_type: str, reward_type: str) -> Path:
-    exact = KERAS_DIR / goal_type / reward_type / "rewards"
+def _resolve_reward_dir(goal_type: str, reward_type: str, base_dir: Path) -> Path:
+    exact = base_dir / goal_type / reward_type / "rewards"
     if exact.exists():
         return exact
 
-    parent = KERAS_DIR / goal_type
-    candidates = sorted(
-        p for p in parent.glob(f"{reward_type}*") if (p / "rewards").exists()
-    )
+    parent = base_dir / goal_type
+    candidates = sorted(p for p in parent.glob(f"{reward_type}*") if (p / "rewards").exists())
     if candidates:
         return candidates[0] / "rewards"
 
@@ -37,12 +31,17 @@ def _resolve_reward_dir(goal_type: str, reward_type: str) -> Path:
     )
 
 
-def main() -> None:
-    config = _load_config()
-    reward_dir = _resolve_reward_dir(config["goal_type"], config["reward_type"])
+def run(
+    goal_type: str = DEFAULT_GOAL_TYPE,
+    reward_type: str = DEFAULT_REWARD_TYPE,
+    base_dir: Path | str | None = None,
+) -> Path:
+    root = KERAS_DIR if base_dir is None else Path(base_dir)
+    reward_dir = _resolve_reward_dir(goal_type, reward_type, root)
     avg_reward_list = load_pickle_file(str((reward_dir / "avg_reward_list").resolve()))
     ep_reward_list = load_pickle_file(str((reward_dir / "ep_reward_list").resolve()))
     output_dir = reward_dir / "plots"
+
     reward_visualization(
         ep_reward_list,
         avg_reward_list,
@@ -55,6 +54,21 @@ def main() -> None:
         output_dir=output_dir,
         filename="reward_log10_visualization.png",
     )
+    return output_dir
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Keras reward visualization runner.")
+    parser.add_argument("--goal-type", default=DEFAULT_GOAL_TYPE)
+    parser.add_argument("--reward-type", default=DEFAULT_REWARD_TYPE)
+    parser.add_argument("--base-dir", type=Path, default=KERAS_DIR)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    output_dir = run(goal_type=args.goal_type, reward_type=args.reward_type, base_dir=args.base_dir)
+    print(f"Saved plots to: {output_dir}")
 
 
 if __name__ == "__main__":

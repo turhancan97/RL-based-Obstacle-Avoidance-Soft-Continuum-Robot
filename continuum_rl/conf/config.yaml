@@ -1,0 +1,12 @@
+defaults:
+  - task: pytorch_train
+  - _self_
+
+observation_mode: canonical
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

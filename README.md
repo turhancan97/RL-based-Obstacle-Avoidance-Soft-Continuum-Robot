@@ -1,19 +1,27 @@
 # Obstacle Avoidance with Reinforcement Learning for a Soft Continuum Robot
 
-This repository trains and evaluates DDPG controllers for a soft continuum robot with static obstacle avoidance.
+This repository trains and evaluates DDPG controllers (PyTorch and Keras) for a soft continuum robot with static obstacle avoidance.
 
 For the base (non-obstacle-avoidance) project, see:
 [RL-based-Control-of-a-Soft-Continuum-Robot](https://github.com/turhancan97/RL-based-Control-of-a-Soft-Continuum-Robot)
 
+## Runtime Contract
+
+- Observation mode is canonical-only.
+- Canonical observation shape is `4 + 2 * obstacle_count`.
+- Default obstacle count is 3 static obstacles.
+- Supported goal modes: `fixed_goal`, `random_goal`.
+
 ## Setup
 
-### Option A: conda (recommended)
+### Option A: conda
 
 ```bash
 git clone https://github.com/turhancan97/RL-based-Obstacle-Avoidance-Soft-Continuum-Robot.git
 cd RL-based-Obstacle-Avoidance-Soft-Continuum-Robot
 conda env create -f environment.yml
 conda activate continuum-rl
+pip install -e .
 ```
 
 ### Option B: pip
@@ -21,107 +29,106 @@ conda activate continuum-rl
 ```bash
 git clone https://github.com/turhancan97/RL-based-Obstacle-Avoidance-Soft-Continuum-Robot.git
 cd RL-based-Obstacle-Avoidance-Soft-Continuum-Robot
-pip install -r requirements.txt
+pip install -e .
 ```
 
-## Runtime Model (v2)
+Python target is `>=3.9,<3.10`.
 
-The repository now uses a compatibility-first runtime:
+## Primary CLI (Hydra)
 
-- Canonical env class: `continuum_rl.env.ContinuumEnv`
-- Backward alias: `continuum_rl.env.continuumEnv`
-- Observation mode:
-  - `canonical` only: `4 + 2 * obstacle_count` features
-- Goal modes:
-  - `fixed_goal`
-  - `random_goal`
-- Default obstacles: 3 static obstacles (configurable via Python API)
-
-## Recommended CLI (Run From Repo Root)
-
-Use root entrypoint:
+Hydra is the primary interface. Use the console script:
 
 ```bash
-python run.py -h
-python run.py pytorch-train -h
-python run.py pytorch-eval-smoke -h
-python run.py keras-train -h
-python run.py keras-eval-smoke -h
+continuum-rl --help
 ```
 
-### 1) Training
+Single app task selector:
 
-#### PyTorch training
+- `task=pytorch_train`
+- `task=pytorch_eval_smoke`
+- `task=keras_train`
+- `task=keras_eval_smoke`
+- `task=pytorch_reward_vis`
+- `task=keras_reward_vis`
+
+### Training
+
+PyTorch:
 
 ```bash
-python run.py pytorch-train \
-  --episodes 300 \
-  --max-t 750 \
-  --print-every 25 \
-  --goal-type fixed_goal \
-  --reward-function step_minus_weighted_euclidean \
-  --reward-file reward_step_minus_weighted_euclidean
+continuum-rl task=pytorch_train
 ```
 
-#### Keras training
+Keras:
 
 ```bash
-python run.py keras-train \
-  --episodes 500 \
-  --max-steps 500 \
-  --goal-type fixed_goal \
-  --reward-function step_minus_weighted_euclidean \
-  --reward-file reward_step_minus_weighted_euclidean
+continuum-rl task=keras_train
 ```
 
-### 2) Inference / Evaluation (Smoke)
+### Inference / Smoke Eval
 
-Smoke eval runs a short rollout and checks checkpoint/runtime compatibility.
-
-#### PyTorch smoke eval
+PyTorch:
 
 ```bash
-python run.py pytorch-eval-smoke \
-  --goal-type fixed_goal \
-  --reward-function step_minus_weighted_euclidean \
-  --max-t 20 \
-  --checkpoint-actor Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth \
-  --checkpoint-critic Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth
+continuum-rl task=pytorch_eval_smoke \
+  task.checkpoint_actor=Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth \
+  task.checkpoint_critic=Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth
 ```
 
-#### Keras smoke eval
+Keras:
 
 ```bash
-python run.py keras-eval-smoke \
-  --goal-type fixed_goal \
-  --reward-function step_minus_weighted_euclidean \
-  --max-steps 20 \
-  --checkpoint-actor Keras/fixed_goal/reward_step_minus_weighted_euclidean/model/continuum_actor.h5
+continuum-rl task=keras_eval_smoke \
+  task.checkpoint_actor=Keras/fixed_goal/reward_step_minus_weighted_euclidean/model/continuum_actor.h5
 ```
 
-`Keras` smoke eval accepts both `.h5` and `.weights.h5` paths.
+### Reward Visualization
 
-### 3) Quick sanity runs
+PyTorch:
 
 ```bash
-python run.py pytorch-train --episodes 1 --max-t 1
-python run.py keras-train --episodes 1 --max-steps 1
+continuum-rl task=pytorch_reward_vis
 ```
 
-## Reward Functions
+Keras:
 
-Available reward functions:
+```bash
+continuum-rl task=keras_reward_vis
+```
 
-- `step_error_comparison`
-- `step_minus_euclidean_square`
-- `step_minus_weighted_euclidean`
-- `step_distance_based`
+Plots are saved under `<framework>/<goal_type>/<reward_type>/rewards/plots/`.
 
-Set with `--reward-function ...` and choose a matching `--reward-file ...`.
+## Hydra Override Examples
 
-## Output Artifacts
+Goal mode:
 
-Training writes outputs to a single canonical location per framework.
+```bash
+continuum-rl task=pytorch_train task.goal_type=random_goal
+```
+
+Reward function + folder:
+
+```bash
+continuum-rl task=keras_train \
+  task.reward_function=step_distance_based \
+  task.reward_file=reward_step_distance_based
+```
+
+Episode / step counts:
+
+```bash
+continuum-rl task=pytorch_train task.episodes=10 task.max_t=100
+continuum-rl task=keras_train task.episodes=10 task.max_steps=100
+```
+
+Output directories:
+
+```bash
+continuum-rl task=pytorch_train task.output_base_dir=Pytorch
+continuum-rl task=keras_train task.output_base_dir=Keras
+```
+
+## Artifacts
 
 ### PyTorch
 
@@ -143,9 +150,22 @@ Training writes outputs to a single canonical location per framework.
   - `continuum_target_critic.weights.h5`
   - metadata sidecars: `*.metadata.json`
 
-## Direct Module Entry Points
+## Deprecated Compatibility Commands
 
-You can still run framework modules directly:
+These still work during the deprecation window but emit warnings and will be removed in the next release milestone.
+
+Legacy wrapper entrypoint:
+
+```bash
+python run.py pytorch-train --episodes 300 --max-t 750
+python run.py pytorch-eval-smoke --checkpoint-actor <path> --checkpoint-critic <path>
+python run.py keras-train --episodes 500 --max-steps 500
+python run.py keras-eval-smoke --checkpoint-actor <path>
+python run.py pytorch-reward-vis
+python run.py keras-reward-vis
+```
+
+Legacy module entrypoints:
 
 ```bash
 python -m Pytorch.ddpg --mode train
@@ -155,26 +175,28 @@ python -m Keras.DDPG --mode train
 python -m Keras.DDPG --mode eval-smoke --checkpoint-actor <actor.h5>
 ```
 
-Cluster scripts are also available:
+## Dependency Source of Truth
 
-- `Pytorch/train.sh`
-- `Keras/train.sh`
+Dependencies are pinned in `pyproject.toml`.
 
-## Visualization
-
-### Reward curve visualization
+Compatibility exports are generated one-way:
 
 ```bash
-python -m Pytorch.reward_visualization.reward_vis
-python -m Keras.reward_visualization.reward_vis
+python scripts/export_dependency_files.py
+python scripts/export_dependency_files.py --check
 ```
 
-These scripts auto-detect available reward folders when the configured folder is missing.
-Saved plots are written to `<reward_dir>/plots/`.
+This keeps `requirements.txt` and `environment.yml` aligned with `pyproject.toml`.
 
-### Interactive demos
+## Tests and Quality Checks
 
-These are explicit demo scripts (not collected by pytest):
+```bash
+pytest
+ruff check continuum_rl Pytorch Keras tests run.py scripts
+python -m py_compile continuum_rl/*.py Pytorch/*.py Keras/*.py scripts/*.py run.py
+```
+
+## Demo Scripts
 
 ```bash
 python Tests/DDPG_pytorch_test.py
@@ -184,29 +206,3 @@ python Tests/polygon_space_test.py
 ```
 
 Demo plots are saved under `Tests/visualizations/`.
-
-## Testing and Quality Checks
-
-```bash
-pytest
-ruff check continuum_rl Pytorch Keras tests run.py
-python -m py_compile continuum_rl/*.py Pytorch/*.py Keras/*.py run.py
-```
-
-## Python API Example
-
-```python
-from continuum_rl.env import ContinuumEnv
-
-env = ContinuumEnv(observation_mode="canonical", goal_type="random_goal")
-obs, info = env.reset(seed=0)
-```
-
-## Troubleshooting
-
-- Checkpoint mismatch error (`state_dim` mismatch):
-  - Use checkpoints trained in canonical mode.
-- Missing reward folder for visualization:
-  - The reward-vis scripts print available folder candidates.
-- Gym/Gymnasium differences:
-  - Compatibility is handled internally by `continuum_rl.gym_compat`.
