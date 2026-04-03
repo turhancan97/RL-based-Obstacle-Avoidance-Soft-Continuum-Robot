@@ -82,6 +82,8 @@ continuum-rl task=keras_eval_smoke \
   task.checkpoint_actor=Keras/fixed_goal/reward_step_minus_weighted_euclidean/model/continuum_actor.h5
 ```
 
+Smoke eval expects checkpoints to exist already. Run training first if checkpoint files are missing.
+
 ### Reward Visualization
 
 PyTorch:
@@ -187,6 +189,15 @@ python scripts/export_dependency_files.py --check
 ```
 
 This keeps `requirements.txt` and `environment.yml` aligned with `pyproject.toml`.
+
+## Repository Cleanup
+
+Use the deterministic cleanup workflow to remove generated files and redundant local artifacts:
+
+```bash
+python scripts/cleanup_repo.py
+python scripts/cleanup_repo.py --apply
+```
 
 ## Tests and Quality Checks
 

@@ -10,10 +10,10 @@ import numpy as np
 from .gym_compat import spaces
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-LEGACY_RL_DIR = REPO_ROOT / "Reinforcement Learning"
-DEFAULT_CIRCLES_PATH = LEGACY_RL_DIR / "circles.txt"
-DEFAULT_POLYGON_POINTS_PATH = LEGACY_RL_DIR / "task_space.npy"
+PACKAGE_DIR = Path(__file__).resolve().parent
+DATA_DIR = PACKAGE_DIR / "data"
+DEFAULT_CIRCLES_PATH = DATA_DIR / "circles.txt"
+DEFAULT_POLYGON_POINTS_PATH = DATA_DIR / "task_space.npy"
 
 
 def load_circles(circles_path: Path | None = None) -> list[dict[str, np.ndarray | float]]:

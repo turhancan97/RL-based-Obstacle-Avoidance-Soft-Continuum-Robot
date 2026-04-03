@@ -7,3 +7,10 @@ __pycache__
 *.pyc
 *.pickle
 *.h5
+*.egg-info
+*.json
+!scripts/cleanup_manifest.json
+hydra_app.log
+Tests/visualizations/
+*.pth
+visualizations/

@@ -43,6 +43,7 @@ include = [
 
 [tool.setuptools.package-data]
 "continuum_rl.conf" = ["*.yaml", "task/*.yaml"]
+"continuum_rl.data" = ["*.txt", "*.npy"]
 
 [tool.continuum_rl.exports]
 conda_env_name = "continuum-rl"
