@@ -57,6 +57,7 @@ Single app task selector:
 - `task=pytorch_reward_vis`
 - `task=keras_reward_vis`
 - `task=paper_figures`
+- `task=gradio_demo`
 
 ### Training
 
@@ -150,6 +151,37 @@ continuum-rl task=paper_figures \
   task.show=false
 ```
 
+### Interactive Gradio Demo
+
+Install UI extras once:
+
+```bash
+pip install -e .[ui]
+```
+
+Launch:
+
+```bash
+continuum-rl task=gradio_demo
+```
+
+Example overrides:
+
+```bash
+continuum-rl task=gradio_demo \
+  task.framework=keras \
+  task.control_mode=manual \
+  task.max_steps=400 \
+  task.seed=7 \
+  task.device=cpu
+```
+
+Compatibility wrapper (deprecated):
+
+```bash
+python run.py gradio-demo --framework pytorch --control-mode policy
+```
+
 ## Hydra Override Examples
 
 Goal mode:
@@ -234,6 +266,7 @@ python run.py keras-train --episodes 500 --max-steps 500
 python run.py keras-eval-smoke --checkpoint-actor <path>
 python run.py pytorch-reward-vis
 python run.py keras-reward-vis
+python run.py gradio-demo --framework pytorch --control-mode policy
 ```
 
 Legacy module entrypoints:

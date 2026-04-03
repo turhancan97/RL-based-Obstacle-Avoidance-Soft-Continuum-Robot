@@ -174,6 +174,36 @@ class PaperFiguresConfig:
     clear_output_dir: bool = True
 
 
+@dataclass
+class GradioDemoConfig:
+    name: str = "gradio_demo"
+    framework: str = "pytorch"
+    control_mode: str = "policy"
+    goal_type: GoalType = "fixed_goal"
+    reward_function: str = "step_minus_weighted_euclidean"
+    checkpoint_actor: str = (
+        "runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_actor.pth"
+    )
+    checkpoint_critic: Optional[str] = (
+        "runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_critic.pth"
+    )
+    device: str = "auto"
+    max_steps: int = 300
+    seed: int = 0
+    initial_kappa: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    fixed_goal_xy: tuple[float, float] = (-0.2, 0.15)
+    manual_action: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    output_dir: str = "visualizations/gradio"
+    save_outputs: bool = True
+    save_animation: bool = True
+    animation_format: str = "gif"
+    share: bool = False
+    server_name: str = "127.0.0.1"
+    server_port: int = 7860
+    single_run_lock: bool = True
+    show_progress: bool = True
+
+
 TaskConfig = Union[
     PytorchTrainConfig,
     PytorchEvalSmokeConfig,
@@ -182,6 +212,7 @@ TaskConfig = Union[
     PytorchRewardVisConfig,
     KerasRewardVisConfig,
     PaperFiguresConfig,
+    GradioDemoConfig,
 ]
 
 
@@ -202,6 +233,7 @@ _TASK_SCHEMAS: dict[str, type] = {
     "pytorch_reward_vis": PytorchRewardVisConfig,
     "keras_reward_vis": KerasRewardVisConfig,
     "paper_figures": PaperFiguresConfig,
+    "gradio_demo": GradioDemoConfig,
 }
 
 
@@ -308,6 +340,25 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
                 "task.include_goal_types contains invalid values: "
                 f"{invalid_goal_types}. Allowed: {sorted(allowed_goal_types)}"
             )
+    if task_name == "gradio_demo":
+        if task_obj.framework not in {"pytorch", "keras"}:
+            raise ValueError("task.framework must be one of: pytorch, keras.")
+        if task_obj.control_mode not in {"policy", "manual"}:
+            raise ValueError("task.control_mode must be one of: policy, manual.")
+        if task_obj.device not in {"auto", "cpu", "gpu"}:
+            raise ValueError("task.device must be one of: auto, cpu, gpu.")
+        if task_obj.max_steps <= 0:
+            raise ValueError("task.max_steps must be > 0.")
+        if len(task_obj.initial_kappa) != 3:
+            raise ValueError("task.initial_kappa must contain exactly 3 values.")
+        if len(task_obj.manual_action) != 3:
+            raise ValueError("task.manual_action must contain exactly 3 values.")
+        if len(task_obj.fixed_goal_xy) != 2:
+            raise ValueError("task.fixed_goal_xy must contain exactly 2 values.")
+        if task_obj.server_port <= 0:
+            raise ValueError("task.server_port must be > 0.")
+        if task_obj.animation_format not in {"gif", "mp4"}:
+            raise ValueError("task.animation_format must be one of: gif, mp4.")
 
     return AppConfig(
         observation_mode=observation_mode,

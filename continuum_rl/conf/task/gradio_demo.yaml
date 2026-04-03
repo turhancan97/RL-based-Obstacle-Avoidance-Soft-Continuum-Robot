@@ -1,0 +1,22 @@
+name: gradio_demo
+framework: pytorch # pytorch | keras
+control_mode: policy # policy | manual
+goal_type: fixed_goal # fixed_goal | random_goal
+reward_function: step_minus_weighted_euclidean
+checkpoint_actor: runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_actor.pth
+checkpoint_critic: runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_critic.pth
+device: auto # auto | cpu | gpu
+max_steps: 300
+seed: 0
+initial_kappa: [0.0, 0.0, 0.0]
+fixed_goal_xy: [-0.2, 0.15]
+manual_action: [0.0, 0.0, 0.0]
+output_dir: visualizations/gradio
+save_outputs: true
+save_animation: true
+animation_format: gif # gif | mp4
+share: false
+server_name: 127.0.0.1
+server_port: 7860
+single_run_lock: true
+show_progress: true

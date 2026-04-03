@@ -134,6 +134,43 @@ def build_parser() -> argparse.ArgumentParser:
     keras_vis.add_argument("--reward-type", default="reward_step_minus_weighted_euclidean")
     keras_vis.add_argument("--base-dir", default="Keras")
 
+    gradio_demo = subparsers.add_parser("gradio-demo", help="Launch interactive Gradio robot demo.")
+    gradio_demo.add_argument("--framework", choices=["pytorch", "keras"], default="pytorch")
+    gradio_demo.add_argument("--control-mode", choices=["policy", "manual"], default="policy")
+    gradio_demo.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
+    gradio_demo.add_argument("--reward-function", default="step_minus_weighted_euclidean")
+    gradio_demo.add_argument("--checkpoint-actor", default=None)
+    gradio_demo.add_argument("--checkpoint-critic", default=None)
+    gradio_demo.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto")
+    gradio_demo.add_argument("--max-steps", type=int, default=300)
+    gradio_demo.add_argument("--seed", type=int, default=0)
+    gradio_demo.add_argument("--initial-kappa", default="0.0,0.0,0.0")
+    gradio_demo.add_argument("--manual-action", default="0.0,0.0,0.0")
+    gradio_demo.add_argument("--fixed-goal-xy", default="-0.2,0.15")
+    gradio_demo.add_argument("--output-dir", default="visualizations/gradio")
+    gradio_demo.add_argument("--save-outputs", dest="save_outputs", action="store_true")
+    gradio_demo.add_argument("--no-save-outputs", dest="save_outputs", action="store_false")
+    gradio_demo.set_defaults(save_outputs=True)
+    gradio_demo.add_argument("--save-animation", dest="save_animation", action="store_true")
+    gradio_demo.add_argument("--no-save-animation", dest="save_animation", action="store_false")
+    gradio_demo.set_defaults(save_animation=True)
+    gradio_demo.add_argument("--animation-format", choices=["gif", "mp4"], default="gif")
+    gradio_demo.add_argument("--share", dest="share", action="store_true")
+    gradio_demo.add_argument("--no-share", dest="share", action="store_false")
+    gradio_demo.set_defaults(share=False)
+    gradio_demo.add_argument("--server-name", default="127.0.0.1")
+    gradio_demo.add_argument("--server-port", type=int, default=7860)
+    gradio_demo.add_argument("--single-run-lock", dest="single_run_lock", action="store_true")
+    gradio_demo.add_argument("--no-single-run-lock", dest="single_run_lock", action="store_false")
+    gradio_demo.set_defaults(single_run_lock=True)
+    gradio_demo.add_argument("--show-progress", dest="show_progress", action="store_true")
+    gradio_demo.add_argument("--no-show-progress", dest="show_progress", action="store_false")
+    gradio_demo.set_defaults(show_progress=True)
+    gradio_demo.add_argument("--env-dt", type=float, default=None)
+    gradio_demo.add_argument("--env-delta-kappa", type=float, default=None)
+    gradio_demo.add_argument("--env-l", default=None)
+    gradio_demo.add_argument("--env-obstacles", default=None)
+
     paper_figs = subparsers.add_parser("paper-figures", help="Generate conference-grade paper figures.")
     paper_figs.add_argument("--runs-root", default="runs")
     paper_figs.add_argument("--output-dir", default="figures/paper/latest")
@@ -279,6 +316,46 @@ def main() -> None:
                 f"task.show={_to_hydra_scalar(args.show)}",
             ]
         )
+        return
+
+    if args.command == "gradio-demo":
+        replacement = "continuum-rl task=gradio_demo"
+        _emit_deprecation(replacement)
+        overrides = [
+            "task=gradio_demo",
+            f"task.framework={args.framework}",
+            f"task.control_mode={args.control_mode}",
+            f"task.goal_type={args.goal_type}",
+            f"task.reward_function={args.reward_function}",
+            f"task.device={args.device}",
+            f"task.max_steps={args.max_steps}",
+            f"task.seed={args.seed}",
+            f"task.initial_kappa=[{args.initial_kappa}]",
+            f"task.manual_action=[{args.manual_action}]",
+            f"task.fixed_goal_xy=[{args.fixed_goal_xy}]",
+            f"task.output_dir={args.output_dir}",
+            f"task.save_outputs={_to_hydra_scalar(args.save_outputs)}",
+            f"task.save_animation={_to_hydra_scalar(args.save_animation)}",
+            f"task.animation_format={args.animation_format}",
+            f"task.share={_to_hydra_scalar(args.share)}",
+            f"task.server_name={args.server_name}",
+            f"task.server_port={args.server_port}",
+            f"task.single_run_lock={_to_hydra_scalar(args.single_run_lock)}",
+            f"task.show_progress={_to_hydra_scalar(args.show_progress)}",
+        ]
+        if args.checkpoint_actor is not None:
+            overrides.append(f"task.checkpoint_actor={args.checkpoint_actor}")
+        if args.checkpoint_critic is not None:
+            overrides.append(f"task.checkpoint_critic={args.checkpoint_critic}")
+        if args.env_dt is not None:
+            overrides.append(f"env.dt={args.env_dt}")
+        if args.env_delta_kappa is not None:
+            overrides.append(f"env.delta_kappa={args.env_delta_kappa}")
+        if args.env_l is not None:
+            overrides.append(f"env.l=[{args.env_l}]")
+        if args.env_obstacles is not None:
+            overrides.append(f"env.obstacles={args.env_obstacles}")
+        run_with_overrides(overrides)
         return
 
     parser.error(f"Unknown command {args.command}")

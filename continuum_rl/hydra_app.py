@@ -182,6 +182,13 @@ def run_task(cfg: AppConfig) -> None:
         print(f"Saved paper figures to: {out_dir}")
         return
 
+    if cfg.task_name == "gradio_demo":
+        from continuum_rl.gradio_demo import launch_gradio_demo
+
+        task = cfg.task
+        launch_gradio_demo(task=task, env_cfg=cfg.env)
+        return
+
     raise ValueError(f"Unsupported task={cfg.task_name}")
 
 

@@ -13,6 +13,7 @@ TASKS = [
     "pytorch_reward_vis",
     "keras_reward_vis",
     "paper_figures",
+    "gradio_demo",
 ]
 
 
@@ -35,6 +36,10 @@ def test_hydra_compose_all_tasks():
             assert cfg.task.format == "jpeg"
             assert cfg.task.ci_method == "bootstrap"
             assert cfg.task.show is False
+        if task == "gradio_demo":
+            assert cfg.task.framework in {"pytorch", "keras"}
+            assert cfg.task.control_mode in {"policy", "manual"}
+            assert cfg.task.device in {"auto", "cpu", "gpu"}
 
 
 def test_hydra_paper_figures_override_smoke():
@@ -59,6 +64,27 @@ def test_hydra_paper_figures_override_smoke():
 def test_hydra_paper_figures_invalid_format_rejected():
     with pytest.raises(Exception):
         compose_config(["task=paper_figures", "task.format=png"])
+
+
+def test_hydra_gradio_demo_override_smoke():
+    cfg = compose_config(
+        [
+            "task=gradio_demo",
+            "task.framework=keras",
+            "task.control_mode=manual",
+            "task.device=cpu",
+            "task.initial_kappa=[1.0,2.0,3.0]",
+            "task.fixed_goal_xy=[-0.2,0.18]",
+            "task.max_steps=50",
+        ]
+    )
+    assert cfg.task_name == "gradio_demo"
+    assert cfg.task.framework == "keras"
+    assert cfg.task.control_mode == "manual"
+    assert cfg.task.device == "cpu"
+    assert list(cfg.task.initial_kappa) == [1.0, 2.0, 3.0]
+    assert list(cfg.task.fixed_goal_xy) == [-0.2, 0.18]
+    assert cfg.task.max_steps == 50
 
 
 def test_hydra_unknown_key_rejected():

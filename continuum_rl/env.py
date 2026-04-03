@@ -40,7 +40,7 @@ class EnvConfig:
     fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2)
     random_goal_range: tuple[float, float] = (-4.0, 16.0)
     delta_kappa: float = 0.001
-    l: tuple[float, float, float] = (0.1, 0.1, 0.1)
+    l: tuple[float, float, float] = (0.1, 0.1, 0.1)  # noqa: E741
     dt: float = 5e-2
     max_episode_steps: int | None = None
 
@@ -57,7 +57,7 @@ class ContinuumEnv(gym.Env):
         fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2),
         random_goal_range: tuple[float, float] = (-4.0, 16.0),
         delta_kappa: float = 0.001,
-        l: Sequence[float] = (0.1, 0.1, 0.1),
+        l: Sequence[float] = (0.1, 0.1, 0.1),  # noqa: E741
         dt: float = 5e-2,
         max_episode_steps: int | None = None,
     ):
@@ -354,16 +354,49 @@ class ContinuumEnv(gym.Env):
             goal_x, goal_y = self.workspace.clip([goal_x, goal_y]).astype(np.float32)
         return float(target_k1), float(target_k2), float(target_k3), float(goal_x), float(goal_y)
 
+    def _parse_initial_kappa_override(self, options: dict | None) -> tuple[float, float, float] | None:
+        if not options or "initial_kappa" not in options:
+            return None
+        raw = options["initial_kappa"]
+        if not isinstance(raw, (list, tuple, np.ndarray)) or len(raw) != 3:
+            raise ValueError("reset options.initial_kappa must be a sequence of length 3.")
+        values = [float(v) for v in raw]
+        self._ensure_finite_array(values, "initial_kappa", "reset options parsing")
+        for idx, val in enumerate(values):
+            if not (self.kappa_min <= val <= self.kappa_max):
+                raise ValueError(
+                    f"reset options.initial_kappa[{idx}]={val} is out of bounds "
+                    f"[{self.kappa_min}, {self.kappa_max}]."
+                )
+        return float(values[0]), float(values[1]), float(values[2])
+
+    def _parse_goal_xy_override(self, options: dict | None) -> tuple[float, float] | None:
+        if not options or "goal_xy" not in options:
+            return None
+        raw = options["goal_xy"]
+        if not isinstance(raw, (list, tuple, np.ndarray)) or len(raw) != 2:
+            raise ValueError("reset options.goal_xy must be a sequence of length 2.")
+        values = [float(v) for v in raw]
+        self._ensure_finite_array(values, "goal_xy", "reset options parsing")
+        goal = np.asarray(values, dtype=np.float32)
+        if not self.workspace.contains(goal):
+            self.overshoot1 += 1
+            goal = self.workspace.clip(goal).astype(np.float32)
+        return float(goal[0]), float(goal[1])
+
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
-        del options  # reserved for future use
         self.workspace.set_rng(self.np_random)
         self.initial_distance = None
         self.step_count = 0
 
-        self.kappa1 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
-        self.kappa2 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
-        self.kappa3 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+        initial_kappa_override = self._parse_initial_kappa_override(options)
+        if initial_kappa_override is None:
+            self.kappa1 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+            self.kappa2 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+            self.kappa3 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+        else:
+            self.kappa1, self.kappa2, self.kappa3 = initial_kappa_override
         self._update_stop_mode()
 
         T3_cc = three_section_planar_robot(self.kappa1, self.kappa2, self.kappa3, self.l)
@@ -374,7 +407,12 @@ class ContinuumEnv(gym.Env):
             x, y = self.workspace.clip([x, y]).astype(np.float32)
             self.overshoot0 += 1
 
-        self.target_k1, self.target_k2, self.target_k3, goal_x, goal_y = self._sample_goal()
+        goal_override = self._parse_goal_xy_override(options)
+        if goal_override is None:
+            self.target_k1, self.target_k2, self.target_k3, goal_x, goal_y = self._sample_goal()
+        else:
+            self.target_k1, self.target_k2, self.target_k3 = self.config.fixed_goal_kappa
+            goal_x, goal_y = goal_override
 
         self._full_state = self._compose_full_state(float(x), float(y), goal_x, goal_y)
         self.error = math.sqrt(((goal_x - x) ** 2) + ((goal_y - y) ** 2))

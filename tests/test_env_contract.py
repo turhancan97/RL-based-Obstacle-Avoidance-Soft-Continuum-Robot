@@ -41,3 +41,24 @@ def test_stop_7_branch_does_not_crash():
     assert isinstance(terminated, bool)
     assert isinstance(truncated, bool)
     assert isinstance(info, dict)
+
+
+def test_reset_supports_initial_kappa_override():
+    env = ContinuumEnv(observation_mode="canonical", goal_type="fixed_goal")
+    obs, _ = env.reset(seed=0, options={"initial_kappa": [1.0, 2.0, 3.0]})
+    assert np.isclose(obs[4], 1.0, atol=1e-8)
+    assert np.isclose(obs[5], 2.0, atol=1e-8)
+    assert np.isclose(obs[6], 3.0, atol=1e-8)
+
+
+def test_reset_supports_goal_xy_override():
+    env = ContinuumEnv(observation_mode="canonical", goal_type="fixed_goal")
+    obs, _ = env.reset(seed=0, options={"goal_xy": [-0.2, 0.15]})
+    assert np.isclose(obs[2], -0.2, atol=1e-8)
+    assert np.isclose(obs[3], 0.15, atol=1e-8)
+
+
+def test_reset_initial_kappa_override_validation():
+    env = ContinuumEnv(observation_mode="canonical", goal_type="fixed_goal")
+    with pytest.raises(ValueError):
+        env.reset(seed=0, options={"initial_kappa": [100.0, 0.0, 0.0]})

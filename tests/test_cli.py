@@ -51,6 +51,28 @@ def test_cli_parses_paper_figures():
     assert args.rollouts_per_seed == 25
 
 
+def test_cli_parses_gradio_demo():
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [
+            "gradio-demo",
+            "--framework",
+            "keras",
+            "--control-mode",
+            "manual",
+            "--max-steps",
+            "123",
+            "--initial-kappa",
+            "1.0,2.0,3.0",
+        ]
+    )
+    assert args.command == "gradio-demo"
+    assert args.framework == "keras"
+    assert args.control_mode == "manual"
+    assert args.max_steps == 123
+    assert args.initial_kappa == "1.0,2.0,3.0"
+
+
 def test_legacy_cli_routes_to_hydra(monkeypatch):
     captured: dict[str, list[str]] = {}
 
@@ -180,3 +202,42 @@ def test_legacy_cli_paper_figures_routes_to_hydra(monkeypatch):
     assert "task.output_dir=figures/paper/latest" in overrides
     assert "task.include_goal_types=[fixed_goal,random_goal]" in overrides
     assert "task.show=true" in overrides
+
+
+def test_legacy_cli_gradio_demo_routes_to_hydra(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run_with_overrides(overrides: list[str]) -> None:
+        captured["overrides"] = overrides
+
+    monkeypatch.setattr(cli, "run_with_overrides", _fake_run_with_overrides)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.py",
+            "gradio-demo",
+            "--framework",
+            "pytorch",
+            "--control-mode",
+            "manual",
+            "--goal-type",
+            "fixed_goal",
+            "--initial-kappa",
+            "1.0,2.0,3.0",
+            "--manual-action",
+            "0.1,0.0,-0.1",
+            "--env-dt",
+            "0.04",
+            "--no-share",
+        ],
+    )
+
+    cli.main()
+    overrides = captured["overrides"]
+    assert "task=gradio_demo" in overrides
+    assert "task.framework=pytorch" in overrides
+    assert "task.control_mode=manual" in overrides
+    assert "task.initial_kappa=[1.0,2.0,3.0]" in overrides
+    assert "task.manual_action=[0.1,0.0,-0.1]" in overrides
+    assert "env.dt=0.04" in overrides
+    assert "task.share=false" in overrides
