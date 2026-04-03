@@ -21,3 +21,6 @@ def test_pyproject_contains_required_contract():
     deps = set(project["dependencies"])
     assert "hydra-core==1.3.2" in deps
     assert "omegaconf==2.3.0" in deps
+
+    extras = project["optional-dependencies"]
+    assert "wandb==0.16.6" in set(extras["wandb"])

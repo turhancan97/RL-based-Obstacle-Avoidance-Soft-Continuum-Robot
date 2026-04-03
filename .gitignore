@@ -14,3 +14,4 @@ hydra_app.log
 Tests/visualizations/
 *.pth
 visualizations/
+wandb/

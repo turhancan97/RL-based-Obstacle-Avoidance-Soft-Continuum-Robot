@@ -22,6 +22,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+wandb = [
+  "wandb==0.16.6",
+]
 dev = [
   "pytest==9.0.2",
   "ruff==0.15.5",

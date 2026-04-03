@@ -1,5 +1,7 @@
 defaults:
   - task: pytorch_train
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
   - _self_
 
 observation_mode: canonical
@@ -14,6 +16,25 @@ env:
       y: 0.02
     - x: -0.16
       y: 0.08
+wandb:
+  enabled: false
+  mode: offline # offline | online
+  project: continuum-rl-obstacle-avoidance
+  entity: null
+  group_by_experiment: true
+  run_name_template: "{framework}-{task_name}-{goal_type}-{reward_id}-seed{seed}"
+  log_system_metrics: true
+  eval_interval_episodes: 50
+  artifact_interval_episodes: 100
+  upload_checkpoints: true
+  fail_open_on_init_error: true
+  health_alerts_enabled: true
+  health_ema_alpha: 0.01
+  health_warmup_steps: 2000
+  health_growth_factor: 3.0
+  health_actor_loss_min_abs: 10.0
+  health_critic_loss_min_abs: 2.0
+  health_grad_norm_max: 20.0
 
 hydra:
   job:

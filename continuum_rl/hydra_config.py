@@ -13,12 +13,6 @@ ObservationMode = str
 TaskName = str
 
 
-@dataclass
-class AppBaseConfig:
-    observation_mode: ObservationMode = "canonical"
-    env: "EnvRuntimeConfig" = field(default_factory=lambda: EnvRuntimeConfig())
-
-
 @dataclass(frozen=True)
 class ObstacleConfig:
     x: float
@@ -28,7 +22,7 @@ class ObstacleConfig:
 @dataclass
 class EnvRuntimeConfig:
     delta_kappa: float = 0.001
-    l: tuple[float, float, float] = (0.1, 0.1, 0.1)
+    l: tuple[float, float, float] = (0.1, 0.1, 0.1)  # noqa: E741
     dt: float = 5e-2
     obstacles: tuple[ObstacleConfig, ...] = field(
         default_factory=lambda: (
@@ -40,17 +34,57 @@ class EnvRuntimeConfig:
 
 
 @dataclass
+class WandbConfig:
+    enabled: bool = False
+    mode: str = "offline"
+    project: str = "continuum-rl-obstacle-avoidance"
+    entity: Optional[str] = None
+    group_by_experiment: bool = True
+    run_name_template: str = "{framework}-{task_name}-{goal_type}-{reward_id}-seed{seed}"
+    log_system_metrics: bool = True
+    eval_interval_episodes: int = 50
+    artifact_interval_episodes: int = 100
+    upload_checkpoints: bool = True
+    fail_open_on_init_error: bool = True
+    health_alerts_enabled: bool = True
+    health_ema_alpha: float = 0.01
+    health_warmup_steps: int = 2_000
+    health_growth_factor: float = 3.0
+    health_actor_loss_min_abs: float = 10.0
+    health_critic_loss_min_abs: float = 2.0
+    health_grad_norm_max: float = 20.0
+
+
+@dataclass
+class AppBaseConfig:
+    observation_mode: ObservationMode = "canonical"
+    env: EnvRuntimeConfig = field(default_factory=EnvRuntimeConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
+
+
+@dataclass
 class PytorchTrainConfig:
     name: str = "pytorch_train"
     goal_type: GoalType = "fixed_goal"
     reward_function: str = "step_minus_weighted_euclidean"
-    reward_file: str = "reward_step_minus_weighted_euclidean"
+    reward_file: Optional[str] = None
     episodes: int = 300
     max_t: int = 750
     print_every: int = 25
     output_base_dir: str = "Pytorch"
     seed: Optional[int] = None
     deterministic: bool = False
+    agent_seed: int = 10
+    buffer_size: int = 50_000
+    batch_size: int = 64
+    gamma: float = 0.99
+    tau: float = 5e-4
+    actor_lr: float = 3e-4
+    critic_lr: float = 1e-3
+    weight_decay: float = 1e-4
+    grad_clip_norm: float = 0.5
+    noise_theta: float = 0.15
+    noise_sigma: float = 0.1
 
 
 @dataclass
@@ -74,12 +108,22 @@ class KerasTrainConfig:
     name: str = "keras_train"
     goal_type: GoalType = "fixed_goal"
     reward_function: str = "step_minus_weighted_euclidean"
-    reward_file: str = "reward_step_minus_weighted_euclidean"
-    episodes: int = 500
-    max_steps: int = 500
+    reward_file: Optional[str] = None
+    episodes: int = 300
+    max_steps: int = 750
     output_base_dir: str = "Keras"
     seed: Optional[int] = None
     deterministic: bool = False
+    buffer_capacity: int = 50_000
+    batch_size: int = 64
+    gamma: float = 0.99
+    tau: float = 5e-4
+    actor_lr: float = 3e-4
+    critic_lr: float = 1e-3
+    grad_clip_norm: float = 0.5
+    noise_std: float = 0.1
+    noise_theta: float = 0.15
+    noise_dt: float = 1.0
 
 
 @dataclass
@@ -125,6 +169,7 @@ TaskConfig = Union[
 class AppConfig:
     observation_mode: ObservationMode
     env: EnvRuntimeConfig
+    wandb: WandbConfig
     task_name: TaskName
     task: TaskConfig
 
@@ -147,6 +192,7 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
         {
             "observation_mode": cfg.get("observation_mode"),
             "env": cfg.get("env"),
+            "wandb": cfg.get("wandb"),
         },
     )
     observation_mode = base_merged.observation_mode
@@ -159,6 +205,27 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
         raise ValueError("env.dt must be greater than 0.")
     if len(env_cfg.l) != 3:
         raise ValueError("env.l must contain exactly 3 segment lengths.")
+    wandb_cfg: WandbConfig = OmegaConf.to_object(base_merged.wandb)
+    if wandb_cfg.mode not in {"offline", "online"}:
+        raise ValueError("wandb.mode must be either 'offline' or 'online'.")
+    if wandb_cfg.eval_interval_episodes <= 0:
+        raise ValueError("wandb.eval_interval_episodes must be greater than 0.")
+    if wandb_cfg.artifact_interval_episodes <= 0:
+        raise ValueError("wandb.artifact_interval_episodes must be greater than 0.")
+    if not (0 < wandb_cfg.health_ema_alpha <= 1):
+        raise ValueError("wandb.health_ema_alpha must be in (0, 1].")
+    if wandb_cfg.health_warmup_steps < 0:
+        raise ValueError("wandb.health_warmup_steps must be >= 0.")
+    if wandb_cfg.health_growth_factor <= 0:
+        raise ValueError("wandb.health_growth_factor must be > 0.")
+    if wandb_cfg.health_actor_loss_min_abs <= 0:
+        raise ValueError("wandb.health_actor_loss_min_abs must be > 0.")
+    if wandb_cfg.health_critic_loss_min_abs <= 0:
+        raise ValueError("wandb.health_critic_loss_min_abs must be > 0.")
+    if wandb_cfg.health_grad_norm_max <= 0:
+        raise ValueError("wandb.health_grad_norm_max must be > 0.")
+    if not wandb_cfg.project:
+        raise ValueError("wandb.project must be a non-empty string.")
 
     task_name = cfg.task.name
     schema = _TASK_SCHEMAS.get(task_name)
@@ -170,10 +237,37 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
     task_obj = OmegaConf.to_object(task_merged)
     if hasattr(task_obj, "goal_type") and task_obj.goal_type not in {"fixed_goal", "random_goal"}:
         raise ValueError(f"Unsupported goal_type={task_obj.goal_type}")
+    if hasattr(task_obj, "reward_function") and hasattr(task_obj, "reward_file"):
+        reward_file = getattr(task_obj, "reward_file", None)
+        if reward_file is None or str(reward_file).strip() == "" or str(reward_file).lower() == "auto":
+            setattr(task_obj, "reward_file", f"reward_{task_obj.reward_function}")
+    if hasattr(task_obj, "gamma") and not (0 < task_obj.gamma <= 1):
+        raise ValueError("task.gamma must be in (0, 1].")
+    if hasattr(task_obj, "tau") and not (0 < task_obj.tau <= 1):
+        raise ValueError("task.tau must be in (0, 1].")
+    for positive_key in (
+        "buffer_size",
+        "buffer_capacity",
+        "batch_size",
+        "actor_lr",
+        "critic_lr",
+        "grad_clip_norm",
+        "noise_sigma",
+        "noise_std",
+        "noise_theta",
+        "noise_dt",
+    ):
+        if hasattr(task_obj, positive_key):
+            value = getattr(task_obj, positive_key)
+            if value <= 0:
+                raise ValueError(f"task.{positive_key} must be greater than 0.")
+    if hasattr(task_obj, "weight_decay") and task_obj.weight_decay < 0:
+        raise ValueError("task.weight_decay must be >= 0.")
 
     return AppConfig(
         observation_mode=observation_mode,
         env=env_cfg,
+        wandb=wandb_cfg,
         task_name=task_name,
         task=task_obj,
     )

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import tensorflow as tf
 
 if __package__ in (None, ""):
@@ -26,7 +25,7 @@ from continuum_robot.utils import (
     plot_various_results,
     sub_plot_various_results,
 )
-from Keras.DDPG import OUActionNoise, config, evaluate_smoke, policy, validate_checkpoint_compatibility
+from Keras.DDPG import config, get_actor, validate_checkpoint_compatibility
 
 
 def main() -> None:
@@ -61,22 +60,29 @@ def main() -> None:
         "reward_function": config["reward"]["function"],
     }
     validate_checkpoint_compatibility(checkpoint_actor, expected)
-    evaluate_smoke(
-        checkpoint_actor=checkpoint_actor,
-        goal_type=config["goal_type"],
-        reward_function=config["reward"]["function"],
-        max_steps=1,
-    )
 
-    std_dev = 0.3
-    ou_noise = OUActionNoise(mean=np.zeros(3), std_deviation=float(std_dev) * np.ones(3))
+    resolved_actor = checkpoint_actor
+    if not resolved_actor.exists():
+        alt = checkpoint_actor.with_name(checkpoint_actor.stem + ".weights.h5")
+        if alt.exists():
+            resolved_actor = alt
+        else:
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_actor} (or {alt})")
+
+    num_states = env.obs_size
+    num_actions = env.action_space.shape[0]
+    upper_bound = float(env.action_space.high[0])
+    lower_bound = float(env.action_space.low[0])
+    actor_model = get_actor(num_states, num_actions, upper_bound)
+    actor_model.load_weights(resolved_actor)
 
     N = 500
     for step in range(N):
         start = time.time()
         tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
-        action = policy(tf_prev_state, ou_noise, add_noise=False)
-        step_out = unpack_step_output(env.step(action[0], reward_function=config["reward"]["function"]))
+        action = tf.squeeze(actor_model(tf_prev_state)).numpy()
+        action = tf.clip_by_value(action, lower_bound, upper_bound).numpy()
+        step_out = unpack_step_output(env.step(action, reward_function=config["reward"]["function"]))
         state, reward = step_out.obs, step_out.reward
         done = step_out.terminated or step_out.truncated
 
@@ -137,26 +143,29 @@ def main() -> None:
         output_dir=output_dir,
         filename="keras_sub_plot_various_results.png",
     )
-    plot_various_results(
-        plot_choice=1,
-        error_store=storage["error"]["error_store"],
-        error_x=storage["error"]["x"],
-        error_y=storage["error"]["y"],
-        pos_x=storage["pos"]["x"],
-        pos_y=storage["pos"]["y"],
-        kappa_1=storage["kappa"]["kappa1"],
-        kappa_2=storage["kappa"]["kappa2"],
-        kappa_3=storage["kappa"]["kappa3"],
-        goal_x=state[2],
-        goal_y=state[3],
-        output_dir=output_dir,
-        file_prefix="keras_plot_various_results",
-    )
+    for plot_choice in (1, 2, 3):
+        plot_various_results(
+            plot_choice=plot_choice,
+            error_store=storage["error"]["error_store"],
+            error_x=storage["error"]["x"],
+            error_y=storage["error"]["y"],
+            pos_x=storage["pos"]["x"],
+            pos_y=storage["pos"]["y"],
+            kappa_1=storage["kappa"]["kappa1"],
+            kappa_2=storage["kappa"]["kappa2"],
+            kappa_3=storage["kappa"]["kappa3"],
+            goal_x=state[2],
+            goal_y=state[3],
+            output_dir=output_dir,
+            file_prefix="keras_plot_various_results",
+        )
+    # Keep plot_average_error robust when rollout terminates before full horizon.
+    error_window = max(len(storage["error"]["error_store"]), 1)
     plot_average_error(
         error_x=storage["error"]["x"],
         error_y=storage["error"]["y"],
         error_store=storage["error"]["error_store"],
-        N=N,
+        N=error_window,
         episode_number=1,
         output_dir=output_dir,
         file_prefix="keras_plot_average_error",

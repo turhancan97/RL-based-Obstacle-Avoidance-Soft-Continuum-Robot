@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -34,6 +35,7 @@ def run_task(cfg: AppConfig) -> None:
         from Pytorch.ddpg import train as pytorch_train
 
         task = cfg.task
+        run_config = asdict(cfg)
         pytorch_train(
             n_episodes=task.episodes,
             max_t=task.max_t,
@@ -45,6 +47,20 @@ def run_task(cfg: AppConfig) -> None:
             seed=task.seed,
             deterministic=task.deterministic,
             env_kwargs=_env_kwargs(cfg.env),
+            wandb_cfg=asdict(cfg.wandb),
+            run_config=run_config,
+            task_name=cfg.task_name,
+            agent_seed=task.agent_seed,
+            buffer_size=task.buffer_size,
+            batch_size=task.batch_size,
+            gamma=task.gamma,
+            tau=task.tau,
+            actor_lr=task.actor_lr,
+            critic_lr=task.critic_lr,
+            weight_decay=task.weight_decay,
+            grad_clip_norm=task.grad_clip_norm,
+            noise_theta=task.noise_theta,
+            noise_sigma=task.noise_sigma,
         )
         return
 
@@ -52,6 +68,7 @@ def run_task(cfg: AppConfig) -> None:
         from Pytorch.ddpg import evaluate_smoke as pytorch_eval_smoke
 
         task = cfg.task
+        run_config = asdict(cfg)
         pytorch_eval_smoke(
             checkpoint_actor=Path(task.checkpoint_actor),
             checkpoint_critic=Path(task.checkpoint_critic),
@@ -61,6 +78,9 @@ def run_task(cfg: AppConfig) -> None:
             seed=task.seed,
             deterministic=task.deterministic,
             env_kwargs=_env_kwargs(cfg.env),
+            wandb_cfg=asdict(cfg.wandb),
+            run_config=run_config,
+            task_name=cfg.task_name,
         )
         return
 
@@ -68,6 +88,7 @@ def run_task(cfg: AppConfig) -> None:
         from Keras.DDPG import train as keras_train
 
         task = cfg.task
+        run_config = asdict(cfg)
         keras_train(
             total_episodes=task.episodes,
             max_steps=task.max_steps,
@@ -78,6 +99,19 @@ def run_task(cfg: AppConfig) -> None:
             seed=task.seed,
             deterministic=task.deterministic,
             env_kwargs=_env_kwargs(cfg.env),
+            wandb_cfg=asdict(cfg.wandb),
+            run_config=run_config,
+            task_name=cfg.task_name,
+            buffer_capacity=task.buffer_capacity,
+            batch_size=task.batch_size,
+            gamma=task.gamma,
+            tau=task.tau,
+            actor_lr=task.actor_lr,
+            critic_lr=task.critic_lr,
+            grad_clip_norm=task.grad_clip_norm,
+            noise_std=task.noise_std,
+            noise_theta=task.noise_theta,
+            noise_dt=task.noise_dt,
         )
         return
 
@@ -85,6 +119,7 @@ def run_task(cfg: AppConfig) -> None:
         from Keras.DDPG import evaluate_smoke as keras_eval_smoke
 
         task = cfg.task
+        run_config = asdict(cfg)
         keras_eval_smoke(
             checkpoint_actor=Path(task.checkpoint_actor),
             goal_type=task.goal_type,
@@ -93,6 +128,9 @@ def run_task(cfg: AppConfig) -> None:
             seed=task.seed,
             deterministic=task.deterministic,
             env_kwargs=_env_kwargs(cfg.env),
+            wandb_cfg=asdict(cfg.wandb),
+            run_config=run_config,
+            task_name=cfg.task_name,
         )
         return
 

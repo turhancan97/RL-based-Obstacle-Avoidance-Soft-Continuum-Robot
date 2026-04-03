@@ -1,8 +1,23 @@
 name: pytorch_train
-goal_type: fixed_goal
+goal_type: fixed_goal # random_goal | fixed_goal
 reward_function: step_minus_weighted_euclidean
-reward_file: reward_step_minus_weighted_euclidean
+# reward function options: step_error_comparison | step_minus_euclidean_square | step_minus_weighted_euclidean | step_distance_based
+reward_file: null
+# optional custom output folder name; default auto-derives to reward_<reward_function>
 episodes: 300
 max_t: 750
 print_every: 25
 output_base_dir: Pytorch
+seed: null
+deterministic: false
+agent_seed: 10
+buffer_size: 50000
+batch_size: 64
+gamma: 0.99
+tau: 0.0005
+actor_lr: 0.0003
+critic_lr: 0.001
+weight_decay: 0.0001
+grad_clip_norm: 0.5
+noise_theta: 0.15
+noise_sigma: 0.1

@@ -1,7 +1,21 @@
 name: keras_train
-goal_type: fixed_goal
+goal_type: fixed_goal # random_goal | fixed_goal
 reward_function: step_minus_weighted_euclidean
-reward_file: reward_step_minus_weighted_euclidean
-episodes: 500
-max_steps: 500
+# reward function options: step_error_comparison | step_minus_euclidean_square | step_minus_weighted_euclidean | step_distance_based
+reward_file: null
+# optional custom output folder name; default auto-derives to reward_<reward_function>
+episodes: 300
+max_steps: 750
 output_base_dir: Keras
+seed: null
+deterministic: false
+buffer_capacity: 50000
+batch_size: 64
+gamma: 0.99
+tau: 0.0005
+actor_lr: 0.0003
+critic_lr: 0.001
+grad_clip_norm: 0.5
+noise_std: 0.1
+noise_theta: 0.15
+noise_dt: 1.0

@@ -1,7 +1,12 @@
 name: continuum-rl
+channels:
+  - conda-forge
+  - defaults
 dependencies:
   - python=3.9.7
   - pip
+  - cudatoolkit=11.8
+  - cudnn=8.6
   - pip:
     - numpy==1.22.3
     - matplotlib==3.5.2

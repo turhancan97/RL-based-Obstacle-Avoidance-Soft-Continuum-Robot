@@ -329,7 +329,6 @@ def sub_plot_various_results(
 ):
     # As Subplots
     fig, axs = plt.subplots(2, 2)
-    fig.tight_layout(h_pad=5, w_pad=5)
     axs[0, 0].plot(range(len(error_store)),error_store,c = 'red',linewidth=2,label='Total Error')
     axs[0, 0].set_xlabel("Steps\n (a)",fontsize=20)
     axs[0, 0].set_ylabel("Error",fontsize=20)

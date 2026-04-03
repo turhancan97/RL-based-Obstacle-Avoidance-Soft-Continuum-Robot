@@ -64,3 +64,69 @@ def test_legacy_cli_routes_to_hydra(monkeypatch):
     assert "task.goal_type=random_goal" in overrides
     assert "task.seed=123" in overrides
     assert "task.deterministic=true" in overrides
+    assert not any(item.startswith("task.reward_file=") for item in overrides)
+
+
+def test_legacy_cli_wandb_routes_to_hydra(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run_with_overrides(overrides: list[str]) -> None:
+        captured["overrides"] = overrides
+
+    monkeypatch.setattr(cli, "run_with_overrides", _fake_run_with_overrides)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.py",
+            "keras-train",
+            "--episodes",
+            "2",
+            "--max-steps",
+            "3",
+            "--wandb-enabled",
+            "--wandb-mode",
+            "offline",
+            "--wandb-project",
+            "demo",
+            "--wandb-eval-interval-episodes",
+            "7",
+            "--wandb-artifact-interval-episodes",
+            "9",
+            "--wandb-no-upload-checkpoints",
+        ],
+    )
+
+    cli.main()
+    overrides = captured["overrides"]
+    assert "task=keras_train" in overrides
+    assert "wandb.enabled=true" in overrides
+    assert "wandb.mode=offline" in overrides
+    assert "wandb.project=demo" in overrides
+    assert "wandb.eval_interval_episodes=7" in overrides
+    assert "wandb.artifact_interval_episodes=9" in overrides
+    assert "wandb.upload_checkpoints=false" in overrides
+
+
+def test_legacy_cli_explicit_reward_file_override(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run_with_overrides(overrides: list[str]) -> None:
+        captured["overrides"] = overrides
+
+    monkeypatch.setattr(cli, "run_with_overrides", _fake_run_with_overrides)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.py",
+            "pytorch-train",
+            "--reward-function",
+            "step_distance_based",
+            "--reward-file",
+            "my_reward_dir",
+        ],
+    )
+
+    cli.main()
+    overrides = captured["overrides"]
+    assert "task.reward_function=step_distance_based" in overrides
+    assert "task.reward_file=my_reward_dir" in overrides

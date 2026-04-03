@@ -137,21 +137,22 @@ def main() -> None:
         output_dir=output_dir,
         filename="pytorch_sub_plot_various_results.png",
     )
-    plot_various_results(
-        plot_choice=1,
-        error_store=storage["error"]["error_store"],
-        error_x=storage["error"]["x"],
-        error_y=storage["error"]["y"],
-        pos_x=storage["pos"]["x"],
-        pos_y=storage["pos"]["y"],
-        kappa_1=storage["kappa"]["kappa1"],
-        kappa_2=storage["kappa"]["kappa2"],
-        kappa_3=storage["kappa"]["kappa3"],
-        goal_x=state[2],
-        goal_y=state[3],
-        output_dir=output_dir,
-        file_prefix="pytorch_plot_various_results",
-    )
+    for plot_choice in (1, 2, 3):
+        plot_various_results(
+            plot_choice=plot_choice,
+            error_store=storage["error"]["error_store"],
+            error_x=storage["error"]["x"],
+            error_y=storage["error"]["y"],
+            pos_x=storage["pos"]["x"],
+            pos_y=storage["pos"]["y"],
+            kappa_1=storage["kappa"]["kappa1"],
+            kappa_2=storage["kappa"]["kappa2"],
+            kappa_3=storage["kappa"]["kappa3"],
+            goal_x=state[2],
+            goal_y=state[3],
+            output_dir=output_dir,
+            file_prefix="pytorch_plot_various_results",
+        )
     # Keep plot_average_error robust when rollout terminates before full horizon.
     error_window = max(len(storage["error"]["error_store"]), 1)
     plot_average_error(

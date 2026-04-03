@@ -119,8 +119,10 @@ Reward function + folder:
 
 ```bash
 continuum-rl task=keras_train \
-  task.reward_function=step_distance_based \
-  task.reward_file=reward_step_distance_based
+  task.reward_function=step_distance_based
+
+`task.reward_file` is optional and auto-derived as `reward_<reward_function>`.  
+Set it explicitly only if you want a custom artifact folder name.
 ```
 
 Episode / step counts:

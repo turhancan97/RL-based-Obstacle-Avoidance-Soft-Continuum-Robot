@@ -87,8 +87,9 @@ def test_pytorch_train_uses_terminated_for_backup(monkeypatch):
     captured_terminal_flags: list[bool] = []
 
     class DummyAgent:
-        def __init__(self, state_size, action_size, random_seed):
+        def __init__(self, state_size, action_size, random_seed, **kwargs):
             del state_size, action_size, random_seed
+            del kwargs
 
         def reset(self):
             return None

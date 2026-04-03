@@ -1,4 +1,5 @@
 name: keras_reward_vis
-goal_type: fixed_goal
+goal_type: fixed_goal # random_goal | fixed_goal
 reward_type: reward_step_minus_weighted_euclidean
+# reward type options: reward_step_error_comparison | reward_step_minus_euclidean_square | reward_step_minus_weighted_euclidean | reward_step_distance_based
 base_dir: Keras
