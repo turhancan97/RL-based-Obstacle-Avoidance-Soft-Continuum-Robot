@@ -6,8 +6,8 @@ reward_file: null
 # optional custom output folder name; default auto-derives to reward_<reward_function>
 episodes: 300
 max_steps: 750
-output_base_dir: Keras
-seed: null
+output_base_dir: runs/keras
+seed: 0
 deterministic: false
 buffer_capacity: 50000
 batch_size: 64

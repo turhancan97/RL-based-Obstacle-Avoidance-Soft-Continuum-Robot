@@ -32,6 +32,25 @@ def test_cli_parses_keras_eval():
     assert args.checkpoint_actor.endswith(".h5")
 
 
+def test_cli_parses_paper_figures():
+    parser = cli.build_parser()
+    args = parser.parse_args(
+        [
+            "paper-figures",
+            "--runs-root",
+            "runs",
+            "--output-dir",
+            "figures/paper/latest",
+            "--rollouts-per-seed",
+            "25",
+        ]
+    )
+    assert args.command == "paper-figures"
+    assert args.runs_root == "runs"
+    assert args.output_dir == "figures/paper/latest"
+    assert args.rollouts_per_seed == 25
+
+
 def test_legacy_cli_routes_to_hydra(monkeypatch):
     captured: dict[str, list[str]] = {}
 
@@ -130,3 +149,34 @@ def test_legacy_cli_explicit_reward_file_override(monkeypatch):
     overrides = captured["overrides"]
     assert "task.reward_function=step_distance_based" in overrides
     assert "task.reward_file=my_reward_dir" in overrides
+
+
+def test_legacy_cli_paper_figures_routes_to_hydra(monkeypatch):
+    captured: dict[str, list[str]] = {}
+
+    def _fake_run_with_overrides(overrides: list[str]) -> None:
+        captured["overrides"] = overrides
+
+    monkeypatch.setattr(cli, "run_with_overrides", _fake_run_with_overrides)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "run.py",
+            "paper-figures",
+            "--runs-root",
+            "runs",
+            "--output-dir",
+            "figures/paper/latest",
+            "--goal-types",
+            "fixed_goal,random_goal",
+            "--show",
+        ],
+    )
+
+    cli.main()
+    overrides = captured["overrides"]
+    assert "task=paper_figures" in overrides
+    assert "task.runs_root=runs" in overrides
+    assert "task.output_dir=figures/paper/latest" in overrides
+    assert "task.include_goal_types=[fixed_goal,random_goal]" in overrides
+    assert "task.show=true" in overrides

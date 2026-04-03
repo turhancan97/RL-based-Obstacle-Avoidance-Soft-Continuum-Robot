@@ -71,8 +71,8 @@ class PytorchTrainConfig:
     episodes: int = 300
     max_t: int = 750
     print_every: int = 25
-    output_base_dir: str = "Pytorch"
-    seed: Optional[int] = None
+    output_base_dir: str = "runs/pytorch"
+    seed: Optional[int] = 0
     deterministic: bool = False
     agent_seed: int = 10
     buffer_size: int = 50_000
@@ -94,12 +94,12 @@ class PytorchEvalSmokeConfig:
     reward_function: str = "step_minus_weighted_euclidean"
     max_t: int = 20
     checkpoint_actor: str = (
-        "Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth"
+        "runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_actor.pth"
     )
     checkpoint_critic: str = (
-        "Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth"
+        "runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_critic.pth"
     )
-    seed: Optional[int] = None
+    seed: Optional[int] = 0
     deterministic: bool = False
 
 
@@ -111,8 +111,8 @@ class KerasTrainConfig:
     reward_file: Optional[str] = None
     episodes: int = 300
     max_steps: int = 750
-    output_base_dir: str = "Keras"
-    seed: Optional[int] = None
+    output_base_dir: str = "runs/keras"
+    seed: Optional[int] = 0
     deterministic: bool = False
     buffer_capacity: int = 50_000
     batch_size: int = 64
@@ -133,9 +133,9 @@ class KerasEvalSmokeConfig:
     reward_function: str = "step_minus_weighted_euclidean"
     max_steps: int = 20
     checkpoint_actor: str = (
-        "Keras/fixed_goal/reward_step_minus_weighted_euclidean/model/continuum_actor.h5"
+        "runs/keras/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/continuum_actor.h5"
     )
-    seed: Optional[int] = None
+    seed: Optional[int] = 0
     deterministic: bool = False
 
 
@@ -144,7 +144,7 @@ class PytorchRewardVisConfig:
     name: str = "pytorch_reward_vis"
     goal_type: GoalType = "fixed_goal"
     reward_type: str = "reward_step_minus_weighted_euclidean"
-    base_dir: str = "Pytorch"
+    base_dir: str = "runs/pytorch"
 
 
 @dataclass
@@ -152,7 +152,26 @@ class KerasRewardVisConfig:
     name: str = "keras_reward_vis"
     goal_type: GoalType = "fixed_goal"
     reward_type: str = "reward_step_minus_weighted_euclidean"
-    base_dir: str = "Keras"
+    base_dir: str = "runs/keras"
+
+
+@dataclass
+class PaperFiguresConfig:
+    name: str = "paper_figures"
+    runs_root: str = "runs"
+    output_dir: str = "figures/paper/latest"
+    format: str = "jpeg"
+    show: bool = False
+    min_seeds_for_claims: int = 5
+    ci_method: str = "bootstrap"
+    ci_level: float = 0.95
+    bootstrap_samples: int = 2000
+    bootstrap_seed: int = 123
+    rollouts_per_seed: int = 100
+    include_goal_types: tuple[str, ...] = ("fixed_goal", "random_goal")
+    max_steps: int = 750
+    reward_function: str = "step_minus_weighted_euclidean"
+    clear_output_dir: bool = True
 
 
 TaskConfig = Union[
@@ -162,6 +181,7 @@ TaskConfig = Union[
     KerasEvalSmokeConfig,
     PytorchRewardVisConfig,
     KerasRewardVisConfig,
+    PaperFiguresConfig,
 ]
 
 
@@ -181,6 +201,7 @@ _TASK_SCHEMAS: dict[str, type] = {
     "keras_eval_smoke": KerasEvalSmokeConfig,
     "pytorch_reward_vis": PytorchRewardVisConfig,
     "keras_reward_vis": KerasRewardVisConfig,
+    "paper_figures": PaperFiguresConfig,
 }
 
 
@@ -263,6 +284,30 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
                 raise ValueError(f"task.{positive_key} must be greater than 0.")
     if hasattr(task_obj, "weight_decay") and task_obj.weight_decay < 0:
         raise ValueError("task.weight_decay must be >= 0.")
+    if task_name == "paper_figures":
+        if task_obj.format.lower() not in {"jpeg", "jpg"}:
+            raise ValueError("task.format must be jpeg (or jpg alias).")
+        if task_obj.ci_method != "bootstrap":
+            raise ValueError("task.ci_method must be bootstrap.")
+        if not (0 < task_obj.ci_level < 1):
+            raise ValueError("task.ci_level must be in (0, 1).")
+        if task_obj.min_seeds_for_claims <= 0:
+            raise ValueError("task.min_seeds_for_claims must be > 0.")
+        if task_obj.bootstrap_samples <= 0:
+            raise ValueError("task.bootstrap_samples must be > 0.")
+        if task_obj.rollouts_per_seed <= 0:
+            raise ValueError("task.rollouts_per_seed must be > 0.")
+        if task_obj.max_steps <= 0:
+            raise ValueError("task.max_steps must be > 0.")
+        allowed_goal_types = {"fixed_goal", "random_goal"}
+        if not task_obj.include_goal_types:
+            raise ValueError("task.include_goal_types must not be empty.")
+        invalid_goal_types = [g for g in task_obj.include_goal_types if g not in allowed_goal_types]
+        if invalid_goal_types:
+            raise ValueError(
+                "task.include_goal_types contains invalid values: "
+                f"{invalid_goal_types}. Allowed: {sorted(allowed_goal_types)}"
+            )
 
     return AppConfig(
         observation_mode=observation_mode,

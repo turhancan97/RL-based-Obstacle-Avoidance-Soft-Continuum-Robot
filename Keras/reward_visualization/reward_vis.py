@@ -19,6 +19,14 @@ def _resolve_reward_dir(goal_type: str, reward_type: str, base_dir: Path) -> Pat
     if exact.exists():
         return exact
 
+    # Seed-aware layout: <base>/<goal>/<reward>/seed_<id>/rewards
+    seed_parent = base_dir / goal_type / reward_type
+    seed_dirs = sorted(
+        p for p in seed_parent.glob("seed_*") if p.is_dir() and (p / "rewards").exists()
+    )
+    if seed_dirs:
+        return seed_dirs[0] / "rewards"
+
     parent = base_dir / goal_type
     candidates = sorted(p for p in parent.glob(f"{reward_type}*") if (p / "rewards").exists())
     if candidates:

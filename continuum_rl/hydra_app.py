@@ -158,6 +158,30 @@ def run_task(cfg: AppConfig) -> None:
         print(f"Saved plots to: {out_dir}")
         return
 
+    if cfg.task_name == "paper_figures":
+        from continuum_rl.visualization.pipeline import run_paper_figures
+
+        task = cfg.task
+        out_dir = run_paper_figures(
+            runs_root=Path(task.runs_root),
+            output_dir=Path(task.output_dir),
+            image_format=task.format,
+            show=task.show,
+            min_seeds_for_claims=task.min_seeds_for_claims,
+            ci_method=task.ci_method,
+            ci_level=task.ci_level,
+            bootstrap_samples=task.bootstrap_samples,
+            bootstrap_seed=task.bootstrap_seed,
+            rollouts_per_seed=task.rollouts_per_seed,
+            include_goal_types=tuple(task.include_goal_types),
+            max_steps=task.max_steps,
+            reward_function=task.reward_function,
+            clear_output_dir=task.clear_output_dir,
+            env_kwargs=_env_kwargs(cfg.env),
+        )
+        print(f"Saved paper figures to: {out_dir}")
+        return
+
     raise ValueError(f"Unsupported task={cfg.task_name}")
 
 

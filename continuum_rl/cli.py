@@ -134,6 +134,15 @@ def build_parser() -> argparse.ArgumentParser:
     keras_vis.add_argument("--reward-type", default="reward_step_minus_weighted_euclidean")
     keras_vis.add_argument("--base-dir", default="Keras")
 
+    paper_figs = subparsers.add_parser("paper-figures", help="Generate conference-grade paper figures.")
+    paper_figs.add_argument("--runs-root", default="runs")
+    paper_figs.add_argument("--output-dir", default="figures/paper/latest")
+    paper_figs.add_argument("--rollouts-per-seed", type=int, default=100)
+    paper_figs.add_argument("--max-steps", type=int, default=750)
+    paper_figs.add_argument("--goal-types", default="fixed_goal,random_goal")
+    paper_figs.add_argument("--reward-function", default="step_minus_weighted_euclidean")
+    paper_figs.add_argument("--show", action="store_true")
+
     return parser
 
 
@@ -249,6 +258,25 @@ def main() -> None:
                 f"task.goal_type={args.goal_type}",
                 f"task.reward_type={args.reward_type}",
                 f"task.base_dir={args.base_dir}",
+            ]
+        )
+        return
+
+    if args.command == "paper-figures":
+        replacement = "continuum-rl task=paper_figures"
+        _emit_deprecation(replacement)
+        goal_types = [item.strip() for item in args.goal_types.split(",") if item.strip()]
+        goal_types_override = ",".join(goal_types)
+        run_with_overrides(
+            [
+                "task=paper_figures",
+                f"task.runs_root={args.runs_root}",
+                f"task.output_dir={args.output_dir}",
+                f"task.rollouts_per_seed={args.rollouts_per_seed}",
+                f"task.max_steps={args.max_steps}",
+                f"task.include_goal_types=[{goal_types_override}]",
+                f"task.reward_function={args.reward_function}",
+                f"task.show={_to_hydra_scalar(args.show)}",
             ]
         )
         return

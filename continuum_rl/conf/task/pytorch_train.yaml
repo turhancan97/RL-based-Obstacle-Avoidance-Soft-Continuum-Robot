@@ -7,8 +7,8 @@ reward_file: null
 episodes: 300
 max_t: 750
 print_every: 25
-output_base_dir: Pytorch
-seed: null
+output_base_dir: runs/pytorch
+seed: 0
 deterministic: false
 agent_seed: 10
 buffer_size: 50000

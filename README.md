@@ -56,6 +56,7 @@ Single app task selector:
 - `task=keras_eval_smoke`
 - `task=pytorch_reward_vis`
 - `task=keras_reward_vis`
+- `task=paper_figures`
 
 ### Training
 
@@ -77,15 +78,15 @@ PyTorch:
 
 ```bash
 continuum-rl task=pytorch_eval_smoke \
-  task.checkpoint_actor=Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth \
-  task.checkpoint_critic=Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth
+  task.checkpoint_actor=runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_actor.pth \
+  task.checkpoint_critic=runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_critic.pth
 ```
 
 Keras:
 
 ```bash
 continuum-rl task=keras_eval_smoke \
-  task.checkpoint_actor=Keras/fixed_goal/reward_step_minus_weighted_euclidean/model/continuum_actor.h5
+  task.checkpoint_actor=runs/keras/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/continuum_actor.h5
 ```
 
 Smoke eval expects checkpoints to exist already. Run training first if checkpoint files are missing.
@@ -105,7 +106,49 @@ Keras:
 continuum-rl task=keras_reward_vis
 ```
 
-Plots are saved under `<framework>/<goal_type>/<reward_type>/rewards/plots/`.
+Plots are saved under `<framework>/<goal_type>/<reward_type>/seed_<id>/rewards/plots/`.
+
+### Conference-Grade Paper Figures
+
+Generate the full paper figure suite (headless, JPEG-only, deterministic output path):
+
+```bash
+continuum-rl task=paper_figures
+```
+
+Input contract is strict local layout (no W&B ingestion):
+
+```text
+runs/<framework>/<goal_type>/<reward_id>/seed_<seed_id>/
+  rewards/
+    avg_reward_list.pickle
+    scores.pickle               # PyTorch
+    ep_reward_list.pickle       # Keras
+  model/
+    checkpoint_actor.pth        # PyTorch
+    checkpoint_critic.pth       # PyTorch
+    continuum_actor.weights.h5  # Keras
+```
+
+Default output:
+
+```text
+figures/paper/latest/
+  *.jpeg
+  manifest.json
+```
+
+Key overrides:
+
+```bash
+continuum-rl task=paper_figures \
+  task.runs_root=runs \
+  task.output_dir=figures/paper/latest \
+  task.rollouts_per_seed=100 \
+  task.include_goal_types=[fixed_goal,random_goal] \
+  task.max_steps=750 \
+  task.show=false
+```
 
 ## Hydra Override Examples
 
@@ -142,16 +185,16 @@ continuum-rl task=keras_train task.seed=123 task.deterministic=true
 Output directories:
 
 ```bash
-continuum-rl task=pytorch_train task.output_base_dir=Pytorch
-continuum-rl task=keras_train task.output_base_dir=Keras
+continuum-rl task=pytorch_train task.output_base_dir=runs/pytorch
+continuum-rl task=keras_train task.output_base_dir=runs/keras
 ```
 
 ## Artifacts
 
 ### PyTorch
 
-- model: `Pytorch/<goal_type>/<reward_file>/model/`
-- rewards: `Pytorch/<goal_type>/<reward_file>/rewards/`
+- model: `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/model/`
+- rewards: `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/rewards/`
 - files:
   - `checkpoint_actor.pth`
   - `checkpoint_critic.pth`
@@ -161,8 +204,8 @@ continuum-rl task=keras_train task.output_base_dir=Keras
 
 ### Keras
 
-- model: `Keras/<goal_type>/<reward_file>/model/`
-- rewards: `Keras/<goal_type>/<reward_file>/rewards/`
+- model: `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/model/`
+- rewards: `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/rewards/`
 - files:
   - `continuum_actor.weights.h5`
   - `continuum_critic.weights.h5`

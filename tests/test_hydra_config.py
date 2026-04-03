@@ -12,6 +12,7 @@ TASKS = [
     "keras_eval_smoke",
     "pytorch_reward_vis",
     "keras_reward_vis",
+    "paper_figures",
 ]
 
 
@@ -30,6 +31,34 @@ def test_hydra_compose_all_tasks():
             assert cfg.task.reward_file == f"reward_{cfg.task.reward_function}"
             assert cfg.task.gamma == 0.99
             assert cfg.task.tau == 0.0005
+        if task == "paper_figures":
+            assert cfg.task.format == "jpeg"
+            assert cfg.task.ci_method == "bootstrap"
+            assert cfg.task.show is False
+
+
+def test_hydra_paper_figures_override_smoke():
+    cfg = compose_config(
+        [
+            "task=paper_figures",
+            "task.runs_root=/tmp/runs",
+            "task.output_dir=/tmp/figures",
+            "task.rollouts_per_seed=20",
+            "task.include_goal_types=[fixed_goal]",
+            "task.bootstrap_samples=500",
+        ]
+    )
+    assert cfg.task_name == "paper_figures"
+    assert cfg.task.runs_root == "/tmp/runs"
+    assert cfg.task.output_dir == "/tmp/figures"
+    assert cfg.task.rollouts_per_seed == 20
+    assert list(cfg.task.include_goal_types) == ["fixed_goal"]
+    assert cfg.task.bootstrap_samples == 500
+
+
+def test_hydra_paper_figures_invalid_format_rejected():
+    with pytest.raises(Exception):
+        compose_config(["task=paper_figures", "task.format=png"])
 
 
 def test_hydra_unknown_key_rejected():

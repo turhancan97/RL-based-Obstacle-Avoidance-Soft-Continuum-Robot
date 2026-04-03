@@ -37,6 +37,7 @@ REPO_ROOT = BASE_DIR.parent
 DEFAULT_GOAL_TYPE = "fixed_goal"
 DEFAULT_REWARD_FUNCTION = "step_minus_weighted_euclidean"
 DEFAULT_REWARD_FILE = "reward_step_minus_weighted_euclidean"
+DEFAULT_OUTPUT_BASE_DIR = REPO_ROOT / "runs" / "pytorch"
 MODEL_ARCH = "ddpg_mlp_actor_128x128_critic_128x128_concat"
 
 # Backward-compatible module-level configuration consumed by legacy demo scripts.
@@ -65,7 +66,7 @@ def _resolve_repo_relative_path(path: Path | str) -> Path:
 
 def _resolve_output_base_dir(output_base_dir: Path | str | None) -> Path:
     if output_base_dir is None:
-        return BASE_DIR
+        return DEFAULT_OUTPUT_BASE_DIR
     return _resolve_repo_relative_path(output_base_dir)
 
 
@@ -73,6 +74,12 @@ def _resolve_reward_file(reward_function: str, reward_file: Optional[str]) -> st
     if reward_file is not None and reward_file.strip() and reward_file.lower() != "auto":
         return reward_file
     return f"reward_{reward_function}"
+
+
+def _seed_dir_name(seed: int | None) -> str:
+    # Keep strict numeric seed directory names for paper-figure discovery.
+    seed_id = 0 if seed is None else int(seed)
+    return f"seed_{seed_id}"
 
 
 def _expected_metadata(
@@ -147,10 +154,12 @@ def _save_checkpoints(
     reward_file: str,
     reward_function: str,
     output_base_dir: Path,
+    seed_dir: str,
     scores: list[float] | None = None,
     avg_reward_list: list[float] | None = None,
 ) -> dict[str, Path]:
-    model_dir = ensure_dir(output_base_dir / goal_type / reward_file / "model")
+    run_dir = output_base_dir / goal_type / reward_file / seed_dir
+    model_dir = ensure_dir(run_dir / "model")
     actor_path = model_dir / "checkpoint_actor.pth"
     critic_path = model_dir / "checkpoint_critic.pth"
     torch.save(agent.actor_local.state_dict(), actor_path)
@@ -160,7 +169,7 @@ def _save_checkpoints(
     write_metadata(actor_path, metadata)
     write_metadata(critic_path, metadata)
 
-    rewards_dir = ensure_dir(output_base_dir / goal_type / reward_file / "rewards")
+    rewards_dir = ensure_dir(run_dir / "rewards")
     if scores is not None:
         with (rewards_dir / "scores.pickle").open("wb") as f:
             pickle.dump(scores, f, pickle.HIGHEST_PROTOCOL)
@@ -254,6 +263,7 @@ def train(
     _configure_runtime(seed=seed, deterministic=deterministic)
     start_time = time.time()
     resolved_reward_file = _resolve_reward_file(reward_function=reward_function, reward_file=reward_file)
+    seed_dir = _seed_dir_name(seed)
     if env_kwargs is None:
         env = _make_env(goal_type=goal_type, max_episode_steps=max_t)
     else:
@@ -444,6 +454,7 @@ def train(
                         reward_file=resolved_reward_file,
                         reward_function=reward_function,
                         output_base_dir=output_dir,
+                        seed_dir=seed_dir,
                     )
                     tracker.log_artifact_files(
                         name=f"pytorch-{goal_type}-{resolved_reward_file}",
@@ -468,6 +479,7 @@ def train(
             reward_file=resolved_reward_file,
             reward_function=reward_function,
             output_base_dir=output_dir,
+            seed_dir=seed_dir,
             scores=scores,
             avg_reward_list=avg_reward_list,
         )
@@ -579,7 +591,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reward-file", default=None)
     parser.add_argument("--checkpoint-actor", type=Path, default=None)
     parser.add_argument("--checkpoint-critic", type=Path, default=None)
-    parser.add_argument("--output-base-dir", type=Path, default=BASE_DIR)
+    parser.add_argument("--output-base-dir", type=Path, default=DEFAULT_OUTPUT_BASE_DIR)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--deterministic", action="store_true")
     return parser.parse_args()
@@ -621,6 +633,7 @@ def main() -> None:
         args.output_base_dir
         / args.goal_type
         / _resolve_reward_file(args.reward_function, args.reward_file)
+        / _seed_dir_name(args.seed)
         / "model"
         / "checkpoint_actor.pth"
     )
@@ -628,6 +641,7 @@ def main() -> None:
         args.output_base_dir
         / args.goal_type
         / _resolve_reward_file(args.reward_function, args.reward_file)
+        / _seed_dir_name(args.seed)
         / "model"
         / "checkpoint_critic.pth"
     )

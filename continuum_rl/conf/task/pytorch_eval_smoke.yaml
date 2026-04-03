@@ -3,7 +3,7 @@ goal_type: fixed_goal # random_goal | fixed_goal
 reward_function: step_minus_weighted_euclidean
 # reward function options: step_error_comparison | step_minus_euclidean_square | step_minus_weighted_euclidean | step_distance_based
 max_t: 20
-checkpoint_actor: Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_actor.pth
-checkpoint_critic: Pytorch/fixed_goal/reward_step_minus_weighted_euclidean/model/checkpoint_critic.pth
-seed: null
+checkpoint_actor: runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_actor.pth
+checkpoint_critic: runs/pytorch/fixed_goal/reward_step_minus_weighted_euclidean/seed_0/model/checkpoint_critic.pth
+seed: 0
 deterministic: false
