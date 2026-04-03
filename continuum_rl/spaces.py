@@ -29,16 +29,36 @@ def load_circles(circles_path: Path | None = None) -> list[dict[str, np.ndarray 
 class AmorphousSpace(spaces.Space):
     """2D workspace represented as the union of circles."""
 
-    def __init__(self, circles: Iterable[dict[str, np.ndarray | float]] | None = None):
+    def __init__(
+        self,
+        circles: Iterable[dict[str, np.ndarray | float]] | None = None,
+        rng: np.random.Generator | np.random.RandomState | None = None,
+    ):
         self.circles = list(circles) if circles is not None else load_circles()
+        self._rng = rng
         super().__init__(shape=(2,), dtype=np.float32)
 
+    def set_rng(self, rng: np.random.Generator | np.random.RandomState | None) -> None:
+        self._rng = rng
+
+    def _rand_index(self, high: int) -> int:
+        if self._rng is None:
+            return int(np.random.randint(high))
+        if hasattr(self._rng, "integers"):
+            return int(self._rng.integers(high))
+        return int(self._rng.randint(high))
+
+    def _rand_uniform(self, low: float, high: float) -> float:
+        if self._rng is None:
+            return float(np.random.uniform(low=low, high=high))
+        return float(self._rng.uniform(low=low, high=high))
+
     def sample(self):
-        circle = self.circles[np.random.randint(len(self.circles))]
+        circle = self.circles[self._rand_index(len(self.circles))]
         center = np.asarray(circle["center"], dtype=np.float32)
         radius = float(circle["radius"])
-        angle = np.random.uniform(low=0.0, high=2.0 * np.pi)
-        distance = np.random.uniform(low=0.0, high=radius)
+        angle = self._rand_uniform(low=0.0, high=2.0 * np.pi)
+        distance = self._rand_uniform(low=0.0, high=radius)
         x = center[0] + distance * np.cos(angle)
         y = center[1] + distance * np.sin(angle)
         return np.array([x, y], dtype=np.float32)
@@ -85,7 +105,11 @@ class AmorphousSpace(spaces.Space):
 class PolygonSpace(spaces.Space):
     """Convex-hull polygon workspace loaded from sample points."""
 
-    def __init__(self, points_path: Path | None = None):
+    def __init__(
+        self,
+        points_path: Path | None = None,
+        rng: np.random.Generator | np.random.RandomState | None = None,
+    ):
         from scipy.spatial import ConvexHull
         import matplotlib.path as mplt_path
 
@@ -94,7 +118,16 @@ class PolygonSpace(spaces.Space):
         self.hull = ConvexHull(self.points)
         self.polygon = mplt_path.Path(self.points[self.hull.vertices])
         self.bounding_box = self._calculate_bounding_box()
+        self._rng = rng
         super().__init__(shape=(2,), dtype=np.float32)
+
+    def set_rng(self, rng: np.random.Generator | np.random.RandomState | None) -> None:
+        self._rng = rng
+
+    def _rand_uniform(self, low: float, high: float) -> float:
+        if self._rng is None:
+            return float(np.random.uniform(low=low, high=high))
+        return float(self._rng.uniform(low=low, high=high))
 
     def _calculate_bounding_box(self) -> tuple[float, float, float, float]:
         min_x, min_y = np.min(self.points, axis=0)
@@ -104,8 +137,8 @@ class PolygonSpace(spaces.Space):
     def sample(self):
         min_x, min_y, max_x, max_y = self.bounding_box
         while True:
-            x = np.random.uniform(min_x, max_x)
-            y = np.random.uniform(min_y, max_y)
+            x = self._rand_uniform(min_x, max_x)
+            y = self._rand_uniform(min_y, max_y)
             if self.contains((x, y)):
                 return np.array([x, y], dtype=np.float32)
 

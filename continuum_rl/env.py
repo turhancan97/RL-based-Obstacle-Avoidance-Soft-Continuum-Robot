@@ -38,6 +38,7 @@ class EnvConfig:
     goal_type: GoalType = "fixed_goal"
     fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2)
     random_goal_range: tuple[float, float] = (-4.0, 16.0)
+    max_episode_steps: int | None = None
 
 
 class ContinuumEnv(gym.Env):
@@ -50,6 +51,7 @@ class ContinuumEnv(gym.Env):
         goal_type: GoalType = "fixed_goal",
         fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2),
         random_goal_range: tuple[float, float] = (-4.0, 16.0),
+        max_episode_steps: int | None = None,
     ):
         if observation_mode != "canonical":
             raise ValueError(
@@ -58,12 +60,15 @@ class ContinuumEnv(gym.Env):
             )
         if goal_type not in {"fixed_goal", "random_goal"}:
             raise ValueError(f"Unsupported goal_type={goal_type}.")
+        if max_episode_steps is not None and max_episode_steps <= 0:
+            raise ValueError("max_episode_steps must be a positive integer or None.")
 
         self.config = EnvConfig(
             observation_mode=observation_mode,
             goal_type=goal_type,
             fixed_goal_kappa=fixed_goal_kappa,
             random_goal_range=random_goal_range,
+            max_episode_steps=max_episode_steps,
         )
 
         self.delta_kappa = 0.001
@@ -112,6 +117,7 @@ class ContinuumEnv(gym.Env):
         self._full_state = np.zeros(4 + 2 * self.num_obstacles, dtype=np.float32)
         self.last_u = np.zeros(3, dtype=np.float32)
         self.initial_distance: float | None = None
+        self.step_count = 0
 
     def _select_observation(self, full_state: np.ndarray) -> np.ndarray:
         return full_state.astype(np.float32)
@@ -178,6 +184,42 @@ class ContinuumEnv(gym.Env):
 
         raise ValueError(f"Unknown reward function: {reward_function}")
 
+    def _ensure_finite_array(self, values: Sequence[float] | np.ndarray, label: str, context: str) -> None:
+        arr = np.asarray(values, dtype=np.float64)
+        if not np.all(np.isfinite(arr)):
+            raise RuntimeError(
+                f"Non-finite {label} detected during {context}. "
+                f"values={arr.tolist()}, stop={self.stop}, "
+                f"kappa=({self.kappa1}, {self.kappa2}, {self.kappa3})"
+            )
+
+    def _apply_stop_mask(self, action: np.ndarray) -> np.ndarray:
+        control = action.copy()
+        if self.stop == 1:
+            control = np.array([0.0, action[1], action[2]], dtype=np.float32)
+        elif self.stop == 2:
+            control = np.array([action[0], 0.0, action[2]], dtype=np.float32)
+        elif self.stop == 3:
+            control = np.array([action[0], action[1], 0.0], dtype=np.float32)
+        elif self.stop == 4:
+            control = np.array([0.0, 0.0, action[2]], dtype=np.float32)
+        elif self.stop == 5:
+            control = np.array([0.0, action[1], 0.0], dtype=np.float32)
+        elif self.stop == 6:
+            control = np.array([action[0], 0.0, 0.0], dtype=np.float32)
+        elif self.stop == 7:
+            control = np.zeros(3, dtype=np.float32)
+        return control
+
+    def _compute_termination_reward(self, costs: float, reward_function: str) -> tuple[bool, float]:
+        if reward_function == "step_minus_euclidean_square":
+            terminated = bool(math.sqrt(max(costs, 0.0)) <= 0.005)
+            reward = -costs
+        else:
+            terminated = bool(self.error <= 0.005)
+            reward = -costs if reward_function == "step_minus_weighted_euclidean" else costs
+        return terminated, float(reward)
+
     def _update_stop_mode(self):
         self.stop = 0
         k1 = self.kappa1 <= self.kappa_min or self.kappa1 >= self.kappa_max
@@ -202,64 +244,67 @@ class ContinuumEnv(gym.Env):
             self.stop = 7
 
     def step(self, action: Sequence[float], reward_function: str = "step_minus_euclidean_square"):
+        step_context = f"step(reward_function={reward_function})"
         x, y, goal_x, goal_y = self._full_state[:4]
         u = np.clip(np.asarray(action, dtype=np.float32), -self.kappa_dot_max, self.kappa_dot_max)
-        costs = self._compute_reward_cost(x, y, goal_x, goal_y, reward_function=reward_function)
-
-        if reward_function == "step_minus_euclidean_square":
-            terminated = bool(math.sqrt(max(costs, 0.0)) <= 0.005)
-            reward = -costs
-        else:
-            terminated = bool(self.error <= 0.005)
-            reward = -costs if reward_function == "step_minus_weighted_euclidean" else costs
+        self._ensure_finite_array(u, "action", f"{step_context}:action preprocessing")
 
         self.J = jacobian_matrix(self.delta_kappa, self.kappa1, self.kappa2, self.kappa3, self.l)
-        control = u.copy()
-        if self.stop == 1:
-            control = np.array([0.0, u[1], u[2]], dtype=np.float32)
-        elif self.stop == 2:
-            control = np.array([u[0], 0.0, u[2]], dtype=np.float32)
-        elif self.stop == 3:
-            control = np.array([u[0], u[1], 0.0], dtype=np.float32)
-        elif self.stop == 4:
-            control = np.array([0.0, 0.0, u[2]], dtype=np.float32)
-        elif self.stop == 5:
-            control = np.array([0.0, u[1], 0.0], dtype=np.float32)
-        elif self.stop == 6:
-            control = np.array([u[0], 0.0, 0.0], dtype=np.float32)
-        elif self.stop == 7:
-            control = np.zeros(3, dtype=np.float32)
+        self._ensure_finite_array(self.J, "jacobian", f"{step_context}:jacobian")
+        control = self._apply_stop_mask(u)
+        self._ensure_finite_array(control, "masked control", f"{step_context}:stop mask")
 
         x_vel = self.J @ control
+        self._ensure_finite_array(x_vel, "tip velocity", f"{step_context}:velocity")
         new_x = float(x + (x_vel[0] * self.dt))
         new_y = float(y + (x_vel[1] * self.dt))
+        self._ensure_finite_array([new_x, new_y], "next tip position", f"{step_context}:integration")
 
-        self.kappa1 = float(np.clip(self.kappa1 + (u[0] * self.dt), self.kappa_min, self.kappa_max))
-        self.kappa2 = float(np.clip(self.kappa2 + (u[1] * self.dt), self.kappa_min, self.kappa_max))
-        self.kappa3 = float(np.clip(self.kappa3 + (u[2] * self.dt), self.kappa_min, self.kappa_max))
+        self.kappa1 = float(np.clip(self.kappa1 + (control[0] * self.dt), self.kappa_min, self.kappa_max))
+        self.kappa2 = float(np.clip(self.kappa2 + (control[1] * self.dt), self.kappa_min, self.kappa_max))
+        self.kappa3 = float(np.clip(self.kappa3 + (control[2] * self.dt), self.kappa_min, self.kappa_max))
         self._update_stop_mode()
 
         if not self.workspace.contains([new_x, new_y]):
             self.overshoot0 += 1
             new_x, new_y = self.workspace.clip([new_x, new_y]).astype(np.float32).tolist()
+            self._ensure_finite_array(
+                [new_x, new_y],
+                "clipped tip position",
+                f"{step_context}:workspace clip",
+            )
 
         if self.workspace.contains([goal_x, goal_y]):
             new_goal_x, new_goal_y = goal_x, goal_y
         else:
             self.overshoot1 += 1
             new_goal_x, new_goal_y = self.workspace.clip([goal_x, goal_y]).astype(np.float32).tolist()
+        self._ensure_finite_array([new_goal_x, new_goal_y], "goal position", f"{step_context}:goal handling")
 
         self._full_state = self._compose_full_state(new_x, new_y, new_goal_x, new_goal_y)
+        costs = self._compute_reward_cost(
+            new_x,
+            new_y,
+            new_goal_x,
+            new_goal_y,
+            reward_function=reward_function,
+        )
+        terminated, reward = self._compute_termination_reward(costs=costs, reward_function=reward_function)
         self.previous_error = self.error
-        self.last_u = u
+        self.last_u = control
+        self.step_count += 1
 
         obs = self._select_observation(self._full_state)
-        truncated = False
+        truncated = bool(
+            self.config.max_episode_steps is not None
+            and self.step_count >= self.config.max_episode_steps
+        )
         info = {
             "error": float(self.error),
             "reward_function": reward_function,
             "observation_mode": self.config.observation_mode,
             "goal_type": self.config.goal_type,
+            "step_count": self.step_count,
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -268,11 +313,12 @@ class ContinuumEnv(gym.Env):
             target_k1, target_k2, target_k3 = self.config.fixed_goal_kappa
         else:
             low, high = self.config.random_goal_range
-            target_k1 = float(np.random.uniform(low=low, high=high))
-            target_k2 = float(np.random.uniform(low=low, high=high))
-            target_k3 = float(np.random.uniform(low=low, high=high))
+            target_k1 = float(self.np_random.uniform(low=low, high=high))
+            target_k2 = float(self.np_random.uniform(low=low, high=high))
+            target_k3 = float(self.np_random.uniform(low=low, high=high))
 
         T3_target = three_section_planar_robot(target_k1, target_k2, target_k3, self.l)
+        self._ensure_finite_array(T3_target, "target tip transform", "goal sampling")
         goal_x, goal_y = np.array([T3_target[0, 3], T3_target[1, 3]], dtype=np.float32)
         if not self.workspace.contains([goal_x, goal_y]):
             self.overshoot1 += 1
@@ -282,15 +328,19 @@ class ContinuumEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
         del options  # reserved for future use
+        self.workspace.set_rng(self.np_random)
         self.initial_distance = None
+        self.step_count = 0
 
-        self.kappa1 = float(np.random.uniform(low=-4, high=16))
-        self.kappa2 = float(np.random.uniform(low=-4, high=16))
-        self.kappa3 = float(np.random.uniform(low=-4, high=16))
+        self.kappa1 = float(self.np_random.uniform(low=-4, high=16))
+        self.kappa2 = float(self.np_random.uniform(low=-4, high=16))
+        self.kappa3 = float(self.np_random.uniform(low=-4, high=16))
         self._update_stop_mode()
 
         T3_cc = three_section_planar_robot(self.kappa1, self.kappa2, self.kappa3, self.l)
+        self._ensure_finite_array(T3_cc, "tip transform", "reset")
         x, y = np.array([T3_cc[0, 3], T3_cc[1, 3]], dtype=np.float32)
+        self._ensure_finite_array([x, y], "tip position", "reset")
         if not self.workspace.contains([x, y]):
             x, y = self.workspace.clip([x, y]).astype(np.float32)
             self.overshoot0 += 1

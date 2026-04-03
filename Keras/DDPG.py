@@ -280,7 +280,11 @@ def train(
     output_base_dir: Path | str | None = None,
 ) -> list[float]:
     start_time = time.time()
-    env = ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
+    env = ContinuumEnv(
+        observation_mode="canonical",
+        goal_type=goal_type,
+        max_episode_steps=max_steps,
+    )
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
     upper_bound = float(env.action_space.high[0])
@@ -391,7 +395,11 @@ def evaluate_smoke(
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     max_steps: int = 20,
 ) -> float:
-    env = ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
+    env = ContinuumEnv(
+        observation_mode="canonical",
+        goal_type=goal_type,
+        max_episode_steps=max_steps,
+    )
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
     upper_bound = float(env.action_space.high[0])

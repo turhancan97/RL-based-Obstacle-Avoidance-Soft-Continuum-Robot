@@ -92,8 +92,12 @@ def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str,
         )
 
 
-def _make_env(goal_type: str) -> ContinuumEnv:
-    return ContinuumEnv(observation_mode="canonical", goal_type=goal_type)
+def _make_env(goal_type: str, max_episode_steps: int | None = None) -> ContinuumEnv:
+    return ContinuumEnv(
+        observation_mode="canonical",
+        goal_type=goal_type,
+        max_episode_steps=max_episode_steps,
+    )
 
 
 def _save_checkpoints(
@@ -135,7 +139,7 @@ def train(
     output_base_dir: Path | str | None = None,
 ) -> list[float]:
     start_time = time.time()
-    env = _make_env(goal_type=goal_type)
+    env = _make_env(goal_type=goal_type, max_episode_steps=max_t)
     agent = Agent(state_size=env.obs_size, action_size=3, random_seed=10)
 
     scores_deque = deque(maxlen=print_every)
@@ -203,7 +207,7 @@ def evaluate_smoke(
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     max_t: int = 20,
 ) -> float:
-    env = _make_env(goal_type=goal_type)
+    env = _make_env(goal_type=goal_type, max_episode_steps=max_t)
     expected = _expected_metadata(env, goal_type, "manual", reward_function)
     validate_checkpoint_compatibility(checkpoint_actor, expected)
     validate_checkpoint_compatibility(checkpoint_critic, expected)
