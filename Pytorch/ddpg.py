@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import random
 import time
 import warnings
 from collections import deque
@@ -13,7 +14,12 @@ from typing import Any
 import numpy as np
 import torch
 
-from continuum_rl.artifacts import ARTIFACT_VERSION, ensure_dir, read_metadata, write_metadata
+from continuum_rl.artifacts import (
+    ARTIFACT_VERSION,
+    ensure_dir,
+    validate_metadata,
+    write_metadata,
+)
 from continuum_rl.env import ContinuumEnv
 from continuum_rl.gym_compat import unpack_step_output
 
@@ -27,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_GOAL_TYPE = "fixed_goal"
 DEFAULT_REWARD_FUNCTION = "step_minus_weighted_euclidean"
 DEFAULT_REWARD_FILE = "reward_step_minus_weighted_euclidean"
+MODEL_ARCH = "ddpg_mlp_actor_128x128_critic_128x128_concat"
 
 # Backward-compatible module-level configuration consumed by legacy demo scripts.
 config: dict[str, Any] = {
@@ -53,7 +60,9 @@ def _expected_metadata(
     return {
         "framework": "pytorch",
         "artifact_version": ARTIFACT_VERSION,
+        "model_arch": MODEL_ARCH,
         "state_dim": env.obs_size,
+        "obs_schema": env.obs_schema,
         "obstacle_count": env.num_obstacles,
         "goal_type": goal_type,
         "reward_function": reward_function,
@@ -61,42 +70,49 @@ def _expected_metadata(
     }
 
 
-def _infer_state_dim_from_checkpoint(checkpoint_path: Path) -> int:
-    state_dict = torch.load(checkpoint_path, map_location=torch.device("cpu"))
-    weight = state_dict.get("fc1.weight")
-    if weight is None:
-        weight = state_dict.get("fcs1.weight")
-    if weight is None:
-        raise ValueError(f"Unable to infer state_dim from checkpoint '{checkpoint_path}'.")
-    return int(weight.shape[1])
-
-
 def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str, Any]) -> None:
-    metadata = read_metadata(checkpoint_path)
-    if metadata:
-        expected_state_dim = expected["state_dim"]
-        actual_state_dim = metadata.get("state_dim")
-        if expected_state_dim != actual_state_dim:
-            raise ValueError(
-                f"Checkpoint incompatible: expected state_dim={expected_state_dim}, "
-                f"actual={actual_state_dim}. Use a checkpoint trained in canonical mode."
-            )
-        return
-
-    actual_state_dim = _infer_state_dim_from_checkpoint(checkpoint_path)
-    expected_state_dim = expected["state_dim"]
-    if actual_state_dim != expected_state_dim:
-        raise ValueError(
-            f"Checkpoint incompatible: expected state_dim={expected_state_dim}, "
-            f"actual={actual_state_dim}. Regenerate checkpoints in canonical mode."
+    try:
+        validate_metadata(
+            checkpoint_path,
+            expected,
+            strict_keys=("state_dim", "obs_schema", "model_arch", "obstacle_count", "goal_type", "reward_function"),
         )
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} Migration note: observation schema changed to canonical_v3 and "
+            "the DDPG network architecture was standardized to 128x128; older checkpoints are intentionally incompatible."
+        ) from exc
 
 
-def _make_env(goal_type: str, max_episode_steps: int | None = None) -> ContinuumEnv:
+def _configure_runtime(seed: int | None, deterministic: bool) -> None:
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception:
+            pass
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+
+
+def _make_env(
+    goal_type: str,
+    max_episode_steps: int | None = None,
+    env_kwargs: dict[str, Any] | None = None,
+) -> ContinuumEnv:
+    kwargs = dict(env_kwargs or {})
     return ContinuumEnv(
         observation_mode="canonical",
         goal_type=goal_type,
         max_episode_steps=max_episode_steps,
+        **kwargs,
     )
 
 
@@ -137,18 +153,24 @@ def train(
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     reward_file: str = DEFAULT_REWARD_FILE,
     output_base_dir: Path | str | None = None,
+    seed: int | None = None,
+    deterministic: bool = False,
+    env_kwargs: dict[str, Any] | None = None,
 ) -> list[float]:
+    _configure_runtime(seed=seed, deterministic=deterministic)
     start_time = time.time()
-    env = _make_env(goal_type=goal_type, max_episode_steps=max_t)
+    env = _make_env(goal_type=goal_type, max_episode_steps=max_t, env_kwargs=env_kwargs)
     agent = Agent(state_size=env.obs_size, action_size=3, random_seed=10)
 
     scores_deque = deque(maxlen=print_every)
     scores: list[float] = []
     avg_reward_list: list[float] = []
-    counter = 0
+    success_counter = 0
+    truncation_counter = 0
 
     for i_episode in range(1, n_episodes + 1):
-        state, _ = env.reset()
+        episode_seed = None if seed is None else seed + i_episode
+        state, _ = env.reset(seed=episode_seed)
         agent.reset()
         score = 0.0
 
@@ -167,12 +189,16 @@ def train(
             action = agent.act(state)
             step_out = unpack_step_output(env.step(action, reward_function=reward_function))
             next_state = step_out.obs
-            done = step_out.terminated or step_out.truncated
-            agent.step(state, action, step_out.reward, next_state, done)
+            episode_done = step_out.terminated or step_out.truncated
+            terminal_for_backup = bool(step_out.terminated)
+            agent.step(state, action, step_out.reward, next_state, terminal_for_backup)
             state = next_state
             score += step_out.reward
-            if done:
-                counter += 1
+            if episode_done:
+                if step_out.terminated:
+                    success_counter += 1
+                elif step_out.truncated:
+                    truncation_counter += 1
                 break
 
         scores_deque.append(score)
@@ -181,7 +207,8 @@ def train(
         print(f"\rEpisode {i_episode}\tAverage Score: {np.mean(scores_deque):.2f}", end="")
 
     print("\n")
-    print(f"{counter} times robot reached the target point in total {n_episodes} episodes")
+    print(f"{success_counter} episodes reached the target point in total {n_episodes} episodes")
+    print(f"{truncation_counter} episodes ended by time-limit truncation")
     end_time = time.time() - start_time
     print("Total Overshoot 0: ", env.overshoot0)
     print("Total Overshoot 1: ", env.overshoot1)
@@ -206,8 +233,12 @@ def evaluate_smoke(
     goal_type: str = DEFAULT_GOAL_TYPE,
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     max_t: int = 20,
+    seed: int | None = None,
+    deterministic: bool = False,
+    env_kwargs: dict[str, Any] | None = None,
 ) -> float:
-    env = _make_env(goal_type=goal_type, max_episode_steps=max_t)
+    _configure_runtime(seed=seed, deterministic=deterministic)
+    env = _make_env(goal_type=goal_type, max_episode_steps=max_t, env_kwargs=env_kwargs)
     expected = _expected_metadata(env, goal_type, "manual", reward_function)
     validate_checkpoint_compatibility(checkpoint_actor, expected)
     validate_checkpoint_compatibility(checkpoint_critic, expected)
@@ -216,16 +247,25 @@ def evaluate_smoke(
     agent.actor_local.load_state_dict(torch.load(checkpoint_actor, map_location=torch.device("cpu")))
     agent.critic_local.load_state_dict(torch.load(checkpoint_critic, map_location=torch.device("cpu")))
 
-    state, _ = env.reset()
+    state, _ = env.reset(seed=seed)
     total_reward = 0.0
+    success_counter = 0
+    truncation_counter = 0
     for _ in range(max_t):
         action = agent.act(state, add_noise=False)
         step_out = unpack_step_output(env.step(action, reward_function=reward_function))
         state = step_out.obs
         total_reward += step_out.reward
         if step_out.terminated or step_out.truncated:
+            if step_out.terminated:
+                success_counter += 1
+            elif step_out.truncated:
+                truncation_counter += 1
             break
-    print(f"Smoke eval finished, total_reward={total_reward:.3f}")
+    print(
+        "Smoke eval finished, "
+        f"total_reward={total_reward:.3f}, successes={success_counter}, truncations={truncation_counter}"
+    )
     return total_reward
 
 
@@ -241,6 +281,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-actor", type=Path, default=None)
     parser.add_argument("--checkpoint-critic", type=Path, default=None)
     parser.add_argument("--output-base-dir", type=Path, default=BASE_DIR)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--deterministic", action="store_true")
     return parser.parse_args()
 
 
@@ -271,6 +313,8 @@ def main() -> None:
             reward_function=args.reward_function,
             reward_file=args.reward_file,
             output_base_dir=args.output_base_dir,
+            seed=args.seed,
+            deterministic=args.deterministic,
         )
         return
 
@@ -286,6 +330,8 @@ def main() -> None:
         goal_type=args.goal_type,
         reward_function=args.reward_function,
         max_t=min(args.max_t, 100),
+        seed=args.seed,
+        deterministic=args.deterministic,
     )
 
 

@@ -50,6 +50,9 @@ def test_legacy_cli_routes_to_hydra(monkeypatch):
             "6",
             "--goal-type",
             "random_goal",
+            "--seed",
+            "123",
+            "--deterministic",
         ],
     )
 
@@ -59,3 +62,5 @@ def test_legacy_cli_routes_to_hydra(monkeypatch):
     assert "task.episodes=5" in overrides
     assert "task.max_t=6" in overrides
     assert "task.goal_type=random_goal" in overrides
+    assert "task.seed=123" in overrides
+    assert "task.deterministic=true" in overrides

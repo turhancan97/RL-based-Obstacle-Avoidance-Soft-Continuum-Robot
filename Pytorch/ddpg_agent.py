@@ -20,6 +20,7 @@ TAU = 1e-3              # for soft update of target parameters
 LR_ACTOR = 1e-3         # learning rate of the actor
 LR_CRITIC = 1e-2        # learning rate of the critic
 WEIGHT_DECAY = 1e-4     # L2 weight decay / 0.0001
+GRAD_CLIP_NORM = 1.0
 
 # BUFFER_SIZE = int(5e5)  # replay buffer size
 # BATCH_SIZE = 128        # minibatch size
@@ -76,10 +77,10 @@ class Agent():
         # Replay memory
         self.memory = ReplayBuffer(action_size, BUFFER_SIZE, BATCH_SIZE, random_seed)
     
-    def step(self, state, action, reward, next_state, done):
+    def step(self, state, action, reward, next_state, terminal):
         """Save experience in replay memory, and use random sample from buffer to learn."""
         # Save experience / reward
-        self.memory.add(state, action, reward, next_state, done)
+        self.memory.add(state, action, reward, next_state, terminal)
 
         # Learn, if enough samples are available in memory
         if len(self.memory) > BATCH_SIZE:
@@ -125,6 +126,7 @@ class Agent():
         # Minimize the loss
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.critic_local.parameters(), GRAD_CLIP_NORM)
         self.critic_optimizer.step()
 
         # ---------------------------- update actor ---------------------------- #
@@ -134,6 +136,7 @@ class Agent():
         # Minimize the loss
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.actor_local.parameters(), GRAD_CLIP_NORM)
         self.actor_optimizer.step()
 
         # ----------------------- update target networks ----------------------- #
@@ -161,6 +164,7 @@ class OUNoise:
         self.theta = theta
         self.sigma = sigma
         self.seed = random.seed(seed)
+        self.rng = np.random.default_rng(seed)
         self.reset()
 
     def reset(self):
@@ -170,7 +174,7 @@ class OUNoise:
     def sample(self):
         """Update internal state and return it as a noise sample."""
         x = self.state
-        dx = self.theta * (self.mu - x) + self.sigma * np.array([random.random() for i in range(len(x))])
+        dx = self.theta * (self.mu - x) + self.sigma * self.rng.standard_normal(size=len(x))
         self.state = x + dx
         return self.state
 

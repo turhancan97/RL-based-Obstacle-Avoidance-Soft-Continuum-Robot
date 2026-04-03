@@ -23,6 +23,7 @@ from .spaces import AmorphousSpace
 
 ObservationMode = Literal["canonical"]
 GoalType = Literal["fixed_goal", "random_goal"]
+OBS_SCHEMA_CANONICAL_V3 = "canonical_v3"
 
 
 DEFAULT_OBSTACLES = (
@@ -38,11 +39,15 @@ class EnvConfig:
     goal_type: GoalType = "fixed_goal"
     fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2)
     random_goal_range: tuple[float, float] = (-4.0, 16.0)
+    delta_kappa: float = 0.001
+    l: tuple[float, float, float] = (0.1, 0.1, 0.1)
+    dt: float = 5e-2
     max_episode_steps: int | None = None
 
 
 class ContinuumEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
+    obs_schema = OBS_SCHEMA_CANONICAL_V3
 
     def __init__(
         self,
@@ -51,6 +56,9 @@ class ContinuumEnv(gym.Env):
         goal_type: GoalType = "fixed_goal",
         fixed_goal_kappa: tuple[float, float, float] = (6.2, 6.2, 6.2),
         random_goal_range: tuple[float, float] = (-4.0, 16.0),
+        delta_kappa: float = 0.001,
+        l: Sequence[float] = (0.1, 0.1, 0.1),
+        dt: float = 5e-2,
         max_episode_steps: int | None = None,
     ):
         if observation_mode != "canonical":
@@ -60,24 +68,34 @@ class ContinuumEnv(gym.Env):
             )
         if goal_type not in {"fixed_goal", "random_goal"}:
             raise ValueError(f"Unsupported goal_type={goal_type}.")
+        if delta_kappa <= 0:
+            raise ValueError("delta_kappa must be greater than 0.")
+        if dt <= 0:
+            raise ValueError("dt must be greater than 0.")
+        if len(l) != 3:
+            raise ValueError("l must contain exactly 3 segment lengths.")
         if max_episode_steps is not None and max_episode_steps <= 0:
             raise ValueError("max_episode_steps must be a positive integer or None.")
+        normalized_l = tuple(float(segment_length) for segment_length in l)
 
         self.config = EnvConfig(
             observation_mode=observation_mode,
             goal_type=goal_type,
             fixed_goal_kappa=fixed_goal_kappa,
             random_goal_range=random_goal_range,
+            delta_kappa=float(delta_kappa),
+            l=normalized_l,
+            dt=float(dt),
             max_episode_steps=max_episode_steps,
         )
 
-        self.delta_kappa = 0.001
+        self.delta_kappa = self.config.delta_kappa
         self.kappa_dot_max = 1.0
         self.kappa_max = 16.0
         self.kappa_min = -4.0
 
-        self.l = [0.1, 0.1, 0.1]
-        self.dt = 5e-2
+        self.l = list(self.config.l)
+        self.dt = self.config.dt
         self.J = np.zeros((2, 3), dtype=np.float32)
         self.error = 0.0
         self.previous_error = 0.0
@@ -91,14 +109,12 @@ class ContinuumEnv(gym.Env):
         self.num_obstacles = len(self.obstacles)
         self.workspace = AmorphousSpace()
 
-        self.obs_size = 4 + (2 * self.num_obstacles)
-        obs_bound = 0.5
-        self.observation_space = spaces.Box(
-            low=-obs_bound,
-            high=obs_bound,
-            shape=(self.obs_size,),
-            dtype=np.float32,
-        )
+        self.obs_size = 7 + (2 * self.num_obstacles)
+        low = np.full((self.obs_size,), -0.5, dtype=np.float32)
+        high = np.full((self.obs_size,), 0.5, dtype=np.float32)
+        low[4:7] = self.kappa_min
+        high[4:7] = self.kappa_max
+        self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
         self.action_space = spaces.Box(
             low=-self.kappa_dot_max,
             high=self.kappa_dot_max,
@@ -114,7 +130,7 @@ class ContinuumEnv(gym.Env):
         for i in range(self.num_obstacles):
             self.position_dic[f"Obs{i+1}"] = {"x": [], "y": []}
 
-        self._full_state = np.zeros(4 + 2 * self.num_obstacles, dtype=np.float32)
+        self._full_state = np.zeros(7 + 2 * self.num_obstacles, dtype=np.float32)
         self.last_u = np.zeros(3, dtype=np.float32)
         self.initial_distance: float | None = None
         self.step_count = 0
@@ -122,8 +138,20 @@ class ContinuumEnv(gym.Env):
     def _select_observation(self, full_state: np.ndarray) -> np.ndarray:
         return full_state.astype(np.float32)
 
-    def _compose_full_state(self, x: float, y: float, goal_x: float, goal_y: float) -> np.ndarray:
-        state = [x, y, goal_x, goal_y]
+    def _compose_full_state(
+        self,
+        x: float,
+        y: float,
+        goal_x: float,
+        goal_y: float,
+        kappa1: float | None = None,
+        kappa2: float | None = None,
+        kappa3: float | None = None,
+    ) -> np.ndarray:
+        k1 = self.kappa1 if kappa1 is None else kappa1
+        k2 = self.kappa2 if kappa2 is None else kappa2
+        k3 = self.kappa3 if kappa3 is None else kappa3
+        state = [x, y, goal_x, goal_y, k1, k2, k3]
         for obstacle in self.obstacles:
             state.extend([obstacle["x"], obstacle["y"]])
         return np.array(state, dtype=np.float32)
@@ -303,6 +331,7 @@ class ContinuumEnv(gym.Env):
             "error": float(self.error),
             "reward_function": reward_function,
             "observation_mode": self.config.observation_mode,
+            "observation_schema": self.obs_schema,
             "goal_type": self.config.goal_type,
             "step_count": self.step_count,
         }
@@ -332,9 +361,9 @@ class ContinuumEnv(gym.Env):
         self.initial_distance = None
         self.step_count = 0
 
-        self.kappa1 = float(self.np_random.uniform(low=-4, high=16))
-        self.kappa2 = float(self.np_random.uniform(low=-4, high=16))
-        self.kappa3 = float(self.np_random.uniform(low=-4, high=16))
+        self.kappa1 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+        self.kappa2 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
+        self.kappa3 = float(self.np_random.uniform(low=self.kappa_min, high=self.kappa_max))
         self._update_stop_mode()
 
         T3_cc = three_section_planar_robot(self.kappa1, self.kappa2, self.kappa3, self.l)
@@ -353,7 +382,11 @@ class ContinuumEnv(gym.Env):
         self.last_u = np.zeros(3, dtype=np.float32)
 
         obs = self._select_observation(self._full_state)
-        info = {"observation_mode": self.config.observation_mode, "goal_type": self.config.goal_type}
+        info = {
+            "observation_mode": self.config.observation_mode,
+            "observation_schema": self.obs_schema,
+            "goal_type": self.config.goal_type,
+        }
         return obs, info
 
     @property
@@ -380,7 +413,7 @@ class ContinuumEnv(gym.Env):
         self.position_dic["Section3"]["y"].append(T3_cc[:, 13])
 
         for i in range(self.num_obstacles):
-            obs_idx = 4 + i * 2
+            obs_idx = 7 + i * 2
             self.position_dic[f"Obs{i+1}"]["x"].append(self._full_state[obs_idx])
             self.position_dic[f"Obs{i+1}"]["y"].append(self._full_state[obs_idx + 1])
 

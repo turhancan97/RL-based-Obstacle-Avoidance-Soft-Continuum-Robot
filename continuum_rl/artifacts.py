@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-ARTIFACT_VERSION = "v2"
+ARTIFACT_VERSION = "v4"
 
 
 def ensure_dir(path: Path | str) -> Path:
@@ -39,13 +39,20 @@ def validate_metadata(
     artifact_path: Path | str,
     expected: dict[str, Any],
     *,
-    strict_keys: tuple[str, ...] = ("state_dim", "obstacle_count", "goal_type", "reward_function"),
+    strict_keys: tuple[str, ...] = (
+        "state_dim",
+        "obs_schema",
+        "model_arch",
+        "obstacle_count",
+        "goal_type",
+        "reward_function",
+    ),
 ) -> dict[str, Any]:
     metadata = read_metadata(artifact_path)
     if not metadata:
         raise ValueError(
             f"Missing metadata sidecar for artifact '{artifact_path}'. "
-            "Please use a checkpoint exported with v2 metadata."
+            "Please use a checkpoint exported with v4 metadata (retrain required after observation-schema and architecture changes)."
         )
 
     mismatches: list[str] = []
@@ -61,7 +68,7 @@ def validate_metadata(
         mismatch_text = "; ".join(mismatches)
         raise ValueError(
             f"Artifact compatibility check failed for '{artifact_path}'. {mismatch_text}. "
-            "Use a matching canonical-mode v2 checkpoint."
+            "Use a matching canonical-mode v4 checkpoint (retrain required after observation-schema and architecture changes)."
         )
 
     return metadata

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import pickle
+import random
 import time
 import warnings
 from pathlib import Path
@@ -14,7 +15,13 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers
 
-from continuum_rl.artifacts import ARTIFACT_VERSION, ensure_dir, read_metadata, write_metadata
+from continuum_rl.artifacts import (
+    ARTIFACT_VERSION,
+    ensure_dir,
+    read_metadata,
+    validate_metadata,
+    write_metadata,
+)
 from continuum_rl.env import ContinuumEnv
 from continuum_rl.gym_compat import unpack_step_output
 
@@ -23,6 +30,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_GOAL_TYPE = "fixed_goal"
 DEFAULT_REWARD_FUNCTION = "step_minus_weighted_euclidean"
 DEFAULT_REWARD_FILE = "reward_step_minus_weighted_euclidean"
+MODEL_ARCH = "ddpg_mlp_actor_128x128_critic_128x128_concat"
 
 # Backward-compatible module-level configuration consumed by legacy demo scripts.
 config: dict[str, Any] = {
@@ -67,6 +75,7 @@ class ReplayBuffer:
         self.action_buffer = np.zeros((self.buffer_capacity, num_actions), dtype=np.float32)
         self.reward_buffer = np.zeros((self.buffer_capacity, 1), dtype=np.float32)
         self.next_state_buffer = np.zeros((self.buffer_capacity, num_states), dtype=np.float32)
+        self.done_buffer = np.zeros((self.buffer_capacity, 1), dtype=np.float32)
 
     def record(self, obs_tuple):
         index = self.buffer_counter % self.buffer_capacity
@@ -74,6 +83,7 @@ class ReplayBuffer:
         self.action_buffer[index] = obs_tuple[1]
         self.reward_buffer[index] = obs_tuple[2]
         self.next_state_buffer[index] = obs_tuple[3]
+        self.done_buffer[index] = obs_tuple[4]
         self.buffer_counter += 1
 
     def sample(self):
@@ -85,15 +95,14 @@ class ReplayBuffer:
         action_batch = tf.convert_to_tensor(self.action_buffer[batch_indices])
         reward_batch = tf.convert_to_tensor(self.reward_buffer[batch_indices], dtype=tf.float32)
         next_state_batch = tf.convert_to_tensor(self.next_state_buffer[batch_indices])
-        return state_batch, action_batch, reward_batch, next_state_batch
+        done_batch = tf.convert_to_tensor(self.done_buffer[batch_indices], dtype=tf.float32)
+        return state_batch, action_batch, reward_batch, next_state_batch, done_batch
 
 
 def get_actor(num_states: int, num_actions: int, upper_bound: float):
     last_init = tf.random_uniform_initializer(minval=-0.003, maxval=0.003)
     inputs = layers.Input(shape=(num_states,))
-    out = layers.Dense(256, activation="relu")(inputs)
-    out = layers.Dense(256, activation="relu")(out)
-    out = layers.Dense(256, activation="relu")(out)
+    out = layers.Dense(128, activation="relu")(inputs)
     out = layers.Dense(128, activation="relu")(out)
     outputs = layers.Dense(num_actions, activation="tanh", kernel_initializer=last_init)(out)
     outputs = outputs * upper_bound
@@ -136,14 +145,9 @@ def _build_actor_from_checkpoint_shapes(checkpoint_path: Path, upper_bound: floa
 
 def get_critic(num_states: int, num_actions: int):
     state_input = layers.Input(shape=(num_states,))
-    state_out = layers.Dense(256, activation="relu")(state_input)
-    state_out = layers.Dense(256, activation="relu")(state_out)
-
     action_input = layers.Input(shape=(num_actions,))
-    action_out = layers.Dense(256, activation="relu")(action_input)
-
-    concat = layers.Concatenate()([state_out, action_out])
-    out = layers.Dense(256, activation="relu")(concat)
+    concat = layers.Concatenate()([state_input, action_input])
+    out = layers.Dense(128, activation="relu")(concat)
     out = layers.Dense(128, activation="relu")(out)
     outputs = layers.Dense(1)(out)
     return tf.keras.Model([state_input, action_input], outputs)
@@ -175,7 +179,9 @@ def _expected_metadata(env: ContinuumEnv, goal_type: str, reward_file: str, rewa
     return {
         "framework": "keras",
         "artifact_version": ARTIFACT_VERSION,
+        "model_arch": MODEL_ARCH,
         "state_dim": env.obs_size,
+        "obs_schema": env.obs_schema,
         "obstacle_count": env.num_obstacles,
         "goal_type": goal_type,
         "reward_function": reward_function,
@@ -195,42 +201,30 @@ def _resolve_weights_path(path: Path) -> Path:
 
 def validate_checkpoint_compatibility(checkpoint_path: Path, expected: dict[str, Any]) -> None:
     checkpoint_path = _resolve_weights_path(checkpoint_path)
-    metadata = read_metadata(checkpoint_path)
-    if metadata:
-        actual_state_dim = metadata.get("state_dim")
-    else:
-        with h5py.File(checkpoint_path, "r") as f:
-            actual_state_dim = None
-            for layer in f.keys():
-                group = f[layer]
-                if isinstance(group, h5py.Group) and "vars" in group and "0" in group["vars"]:
-                    arr = group["vars"]["0"]
-                    if len(arr.shape) == 2:
-                        actual_state_dim = int(arr.shape[0])
-                        break
-            if actual_state_dim is None:
-                for _, dataset in f.items():
-                    if isinstance(dataset, h5py.Dataset) and len(dataset.shape) == 2:
-                        actual_state_dim = int(dataset.shape[0])
-                        break
-            if actual_state_dim is None:
-
-                def _finder(_name, obj):
-                    nonlocal actual_state_dim
-                    if actual_state_dim is not None:
-                        return
-                    if isinstance(obj, h5py.Dataset) and len(obj.shape) == 2:
-                        actual_state_dim = int(obj.shape[0])
-
-                f.visititems(_finder)
-        if actual_state_dim is None:
-            raise ValueError(f"Unable to infer state_dim for checkpoint '{checkpoint_path}'.")
-
-    if actual_state_dim != expected["state_dim"]:
-        raise ValueError(
-            f"Checkpoint incompatible: expected state_dim={expected['state_dim']}, actual={actual_state_dim}. "
-            "Regenerate checkpoint in canonical mode."
+    try:
+        validate_metadata(
+            checkpoint_path,
+            expected,
+            strict_keys=("state_dim", "obs_schema", "model_arch", "obstacle_count", "goal_type", "reward_function"),
         )
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc} Migration note: observation schema changed to canonical_v3 and "
+            "the DDPG network architecture was standardized to 128x128; older checkpoints are intentionally incompatible."
+        ) from exc
+
+
+def _configure_runtime(seed: int | None, deterministic: bool) -> None:
+    if seed is not None:
+        random.seed(seed)
+        np.random.seed(seed)
+        tf.keras.utils.set_random_seed(seed)
+
+    if deterministic:
+        try:
+            tf.config.experimental.enable_op_determinism()
+        except Exception:
+            pass
 
 
 def _save_weights(
@@ -278,12 +272,18 @@ def train(
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     reward_file: str = DEFAULT_REWARD_FILE,
     output_base_dir: Path | str | None = None,
+    seed: int | None = None,
+    deterministic: bool = False,
+    env_kwargs: dict[str, Any] | None = None,
 ) -> list[float]:
+    _configure_runtime(seed=seed, deterministic=deterministic)
     start_time = time.time()
+    kwargs = dict(env_kwargs or {})
     env = ContinuumEnv(
         observation_mode="canonical",
         goal_type=goal_type,
         max_episode_steps=max_steps,
+        **kwargs,
     )
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
@@ -301,32 +301,46 @@ def train(
     actor_optimizer = tf.keras.optimizers.Adam(1e-4)
     gamma = 0.99
     tau = 1e-3
+    grad_clip_norm = 1.0
 
     @tf.function
-    def update_batch(state_batch, action_batch, reward_batch, next_state_batch):
+    def update_batch(state_batch, action_batch, reward_batch, next_state_batch, done_batch):
         with tf.GradientTape() as tape:
             target_actions = target_actor(next_state_batch, training=True)
-            y = reward_batch + gamma * target_critic([next_state_batch, target_actions], training=True)
+            y = reward_batch + gamma * (1.0 - done_batch) * target_critic(
+                [next_state_batch, target_actions],
+                training=True,
+            )
             critic_value = critic_model([state_batch, action_batch], training=True)
             critic_loss = tf.math.reduce_mean(tf.math.square(y - critic_value))
         critic_grad = tape.gradient(critic_loss, critic_model.trainable_variables)
-        critic_optimizer.apply_gradients(zip(critic_grad, critic_model.trainable_variables))
+        critic_pairs = [(g, v) for g, v in zip(critic_grad, critic_model.trainable_variables) if g is not None]
+        if critic_pairs:
+            critic_grads, critic_vars = zip(*critic_pairs)
+            clipped_critic_grads, _ = tf.clip_by_global_norm(critic_grads, grad_clip_norm)
+            critic_optimizer.apply_gradients(zip(clipped_critic_grads, critic_vars))
 
         with tf.GradientTape() as tape:
             actions = actor_model(state_batch, training=True)
             critic_value = critic_model([state_batch, actions], training=True)
             actor_loss = -tf.math.reduce_mean(critic_value)
         actor_grad = tape.gradient(actor_loss, actor_model.trainable_variables)
-        actor_optimizer.apply_gradients(zip(actor_grad, actor_model.trainable_variables))
+        actor_pairs = [(g, v) for g, v in zip(actor_grad, actor_model.trainable_variables) if g is not None]
+        if actor_pairs:
+            actor_grads, actor_vars = zip(*actor_pairs)
+            clipped_actor_grads, _ = tf.clip_by_global_norm(actor_grads, grad_clip_norm)
+            actor_optimizer.apply_gradients(zip(clipped_actor_grads, actor_vars))
 
     buffer = ReplayBuffer(num_states=num_states, num_actions=num_actions, buffer_capacity=int(1e6), batch_size=256)
     ep_reward_list: list[float] = []
     avg_reward_list: list[float] = []
-    counter = 0
+    success_counter = 0
+    truncation_counter = 0
     noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(0.3) * np.ones(num_actions))
 
     for ep in range(total_episodes):
-        prev_state, _ = env.reset()
+        episode_seed = None if seed is None else seed + ep
+        prev_state, _ = env.reset(seed=episode_seed)
         episodic_reward = 0.0
 
         if ep % 50 == 0:
@@ -347,9 +361,10 @@ def train(
             step_out = unpack_step_output(env.step(action, reward_function=reward_function))
             state = step_out.obs
             reward = step_out.reward
-            done = step_out.terminated or step_out.truncated
+            episode_done = step_out.terminated or step_out.truncated
+            terminal_for_backup = float(step_out.terminated)
 
-            buffer.record((prev_state, action, reward, state))
+            buffer.record((prev_state, action, reward, state, terminal_for_backup))
             batch = buffer.sample()
             if batch is not None:
                 update_batch(*batch)
@@ -358,8 +373,11 @@ def train(
 
             episodic_reward += reward
             prev_state = state
-            if done:
-                counter += 1
+            if episode_done:
+                if step_out.terminated:
+                    success_counter += 1
+                elif step_out.truncated:
+                    truncation_counter += 1
                 break
 
         ep_reward_list.append(float(episodic_reward))
@@ -367,7 +385,8 @@ def train(
         avg_reward_list.append(avg_reward)
         print(f"Episode * {ep} * Avg Reward is ==> {avg_reward}")
 
-    print(f"{counter} times robot reached the target point in total {total_episodes} episodes")
+    print(f"{success_counter} episodes reached the target point in total {total_episodes} episodes")
+    print(f"{truncation_counter} episodes ended by time-limit truncation")
     end_time = time.time() - start_time
     print("Total Overshoot 0: ", env.overshoot0)
     print("Total Overshoot 1: ", env.overshoot1)
@@ -394,11 +413,17 @@ def evaluate_smoke(
     goal_type: str = DEFAULT_GOAL_TYPE,
     reward_function: str = DEFAULT_REWARD_FUNCTION,
     max_steps: int = 20,
+    seed: int | None = None,
+    deterministic: bool = False,
+    env_kwargs: dict[str, Any] | None = None,
 ) -> float:
+    _configure_runtime(seed=seed, deterministic=deterministic)
+    kwargs = dict(env_kwargs or {})
     env = ContinuumEnv(
         observation_mode="canonical",
         goal_type=goal_type,
         max_episode_steps=max_steps,
+        **kwargs,
     )
     num_states = env.obs_size
     num_actions = env.action_space.shape[0]
@@ -418,8 +443,10 @@ def evaluate_smoke(
     actor_model.load_weights(resolved_actor)
 
     noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(0.3) * np.ones(num_actions))
-    state, _ = env.reset()
+    state, _ = env.reset(seed=seed)
     total_reward = 0.0
+    success_counter = 0
+    truncation_counter = 0
     for _ in range(max_steps):
         tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
         action = _policy_impl(
@@ -434,9 +461,16 @@ def evaluate_smoke(
         state = step_out.obs
         total_reward += step_out.reward
         if step_out.terminated or step_out.truncated:
+            if step_out.terminated:
+                success_counter += 1
+            elif step_out.truncated:
+                truncation_counter += 1
             break
 
-    print(f"Keras smoke eval finished, total_reward={total_reward:.3f}")
+    print(
+        "Keras smoke eval finished, "
+        f"total_reward={total_reward:.3f}, successes={success_counter}, truncations={truncation_counter}"
+    )
     return total_reward
 
 
@@ -490,6 +524,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reward-file", default=DEFAULT_REWARD_FILE)
     parser.add_argument("--checkpoint-actor", type=Path, default=None)
     parser.add_argument("--output-base-dir", type=Path, default=BASE_DIR)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--deterministic", action="store_true")
     return parser.parse_args()
 
 
@@ -515,6 +551,8 @@ def main() -> None:
             reward_function=args.reward_function,
             reward_file=args.reward_file,
             output_base_dir=args.output_base_dir,
+            seed=args.seed,
+            deterministic=args.deterministic,
         )
         return
 
@@ -526,6 +564,8 @@ def main() -> None:
         goal_type=args.goal_type,
         reward_function=args.reward_function,
         max_steps=min(args.max_steps, 100),
+        seed=args.seed,
+        deterministic=args.deterministic,
     )
 
 

@@ -8,9 +8,15 @@ For the base (non-obstacle-avoidance) project, see:
 ## Runtime Contract
 
 - Observation mode is canonical-only.
-- Canonical observation shape is `4 + 2 * obstacle_count`.
+- Canonical observation schema is `canonical_v3`.
+- Canonical observation shape is `7 + 2 * obstacle_count`:
+  `[x, y, goal_x, goal_y, kappa1, kappa2, kappa3, obstacle_x..., obstacle_y...]`.
+- DDPG architecture is standardized across frameworks:
+  - Actor: MLP `128 -> 128 -> action(tanh)`
+  - Critic: concat(state, action) -> MLP `128 -> 128 -> Q`
 - Default obstacle count is 3 static obstacles.
 - Supported goal modes: `fixed_goal`, `random_goal`.
+- Checkpoints must include matching metadata (`state_dim`, `obs_schema`, etc.); older checkpoints are intentionally incompatible.
 
 ## Setup
 
@@ -83,6 +89,7 @@ continuum-rl task=keras_eval_smoke \
 ```
 
 Smoke eval expects checkpoints to exist already. Run training first if checkpoint files are missing.
+After the `canonical_v3` + architecture-standardization update, retrain models before running eval.
 
 ### Reward Visualization
 
@@ -123,6 +130,13 @@ continuum-rl task=pytorch_train task.episodes=10 task.max_t=100
 continuum-rl task=keras_train task.episodes=10 task.max_steps=100
 ```
 
+Reproducible and deterministic execution:
+
+```bash
+continuum-rl task=pytorch_train task.seed=123 task.deterministic=true
+continuum-rl task=keras_train task.seed=123 task.deterministic=true
+```
+
 Output directories:
 
 ```bash
@@ -140,6 +154,8 @@ continuum-rl task=keras_train task.output_base_dir=Keras
   - `checkpoint_actor.pth`
   - `checkpoint_critic.pth`
   - metadata sidecars: `*.metadata.json`
+  - metadata includes `obs_schema: canonical_v3`
+  - metadata includes `model_arch: ddpg_mlp_actor_128x128_critic_128x128_concat`
 
 ### Keras
 
@@ -151,6 +167,14 @@ continuum-rl task=keras_train task.output_base_dir=Keras
   - `continuum_target_actor.weights.h5`
   - `continuum_target_critic.weights.h5`
   - metadata sidecars: `*.metadata.json`
+  - metadata includes `obs_schema: canonical_v3`
+  - metadata includes `model_arch: ddpg_mlp_actor_128x128_critic_128x128_concat`
+
+## Training/Eval Semantics
+
+- TD terminal masking uses only true termination (`terminated=True`), not time-limit truncation.
+- Success counters track true goal-reaching terminations only.
+- Truncation counts are reported separately.
 
 ## Deprecated Compatibility Commands
 

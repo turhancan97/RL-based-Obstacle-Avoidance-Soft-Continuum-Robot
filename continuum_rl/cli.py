@@ -20,6 +20,14 @@ def _emit_deprecation(replacement: str) -> None:
     print(message)
 
 
+def _to_hydra_scalar(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Legacy continuum RL command wrapper.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -32,6 +40,8 @@ def build_parser() -> argparse.ArgumentParser:
     pytorch_train.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     pytorch_train.add_argument("--reward-file", default="reward_step_minus_weighted_euclidean")
     pytorch_train.add_argument("--output-base-dir", default="Pytorch")
+    pytorch_train.add_argument("--seed", type=int, default=None)
+    pytorch_train.add_argument("--deterministic", action="store_true")
 
     pytorch_eval = subparsers.add_parser("pytorch-eval-smoke", help="Run PyTorch smoke evaluation.")
     pytorch_eval.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
@@ -39,6 +49,8 @@ def build_parser() -> argparse.ArgumentParser:
     pytorch_eval.add_argument("--max-t", type=int, default=20)
     pytorch_eval.add_argument("--checkpoint-actor", required=True)
     pytorch_eval.add_argument("--checkpoint-critic", required=True)
+    pytorch_eval.add_argument("--seed", type=int, default=None)
+    pytorch_eval.add_argument("--deterministic", action="store_true")
 
     keras_train = subparsers.add_parser("keras-train", help="Train Keras DDPG.")
     keras_train.add_argument("--episodes", type=int, default=500)
@@ -47,12 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
     keras_train.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     keras_train.add_argument("--reward-file", default="reward_step_minus_weighted_euclidean")
     keras_train.add_argument("--output-base-dir", default="Keras")
+    keras_train.add_argument("--seed", type=int, default=None)
+    keras_train.add_argument("--deterministic", action="store_true")
 
     keras_eval = subparsers.add_parser("keras-eval-smoke", help="Run Keras smoke evaluation.")
     keras_eval.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
     keras_eval.add_argument("--reward-function", default="step_minus_weighted_euclidean")
     keras_eval.add_argument("--max-steps", type=int, default=20)
     keras_eval.add_argument("--checkpoint-actor", required=True)
+    keras_eval.add_argument("--seed", type=int, default=None)
+    keras_eval.add_argument("--deterministic", action="store_true")
 
     pytorch_vis = subparsers.add_parser("pytorch-reward-vis", help="Generate PyTorch reward visualizations.")
     pytorch_vis.add_argument("--goal-type", choices=["fixed_goal", "random_goal"], default="fixed_goal")
@@ -88,6 +104,8 @@ def main() -> None:
                 f"task.reward_function={args.reward_function}",
                 f"task.reward_file={args.reward_file}",
                 f"task.output_base_dir={args.output_base_dir}",
+                f"task.seed={_to_hydra_scalar(args.seed)}",
+                f"task.deterministic={_to_hydra_scalar(args.deterministic)}",
             ]
         )
         return
@@ -103,6 +121,8 @@ def main() -> None:
                 f"task.max_t={args.max_t}",
                 f"task.checkpoint_actor={args.checkpoint_actor}",
                 f"task.checkpoint_critic={args.checkpoint_critic}",
+                f"task.seed={_to_hydra_scalar(args.seed)}",
+                f"task.deterministic={_to_hydra_scalar(args.deterministic)}",
             ]
         )
         return
@@ -123,6 +143,8 @@ def main() -> None:
                 f"task.reward_function={args.reward_function}",
                 f"task.reward_file={args.reward_file}",
                 f"task.output_base_dir={args.output_base_dir}",
+                f"task.seed={_to_hydra_scalar(args.seed)}",
+                f"task.deterministic={_to_hydra_scalar(args.deterministic)}",
             ]
         )
         return
@@ -137,6 +159,8 @@ def main() -> None:
                 f"task.reward_function={args.reward_function}",
                 f"task.max_steps={args.max_steps}",
                 f"task.checkpoint_actor={args.checkpoint_actor}",
+                f"task.seed={_to_hydra_scalar(args.seed)}",
+                f"task.deterministic={_to_hydra_scalar(args.deterministic)}",
             ]
         )
         return

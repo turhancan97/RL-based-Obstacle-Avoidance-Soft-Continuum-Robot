@@ -11,7 +11,11 @@ def test_canonical_observation_contract():
     obs, info = env.reset(seed=0)
     assert isinstance(info, dict)
     assert obs.shape == (env.obs_size,)
-    assert env.obs_size == 4 + (2 * env.num_obstacles)
+    assert env.obs_size == 7 + (2 * env.num_obstacles)
+    assert info["observation_schema"] == env.obs_schema
+    assert np.isclose(obs[4], env.kappa1, atol=1e-8)
+    assert np.isclose(obs[5], env.kappa2, atol=1e-8)
+    assert np.isclose(obs[6], env.kappa3, atol=1e-8)
     assert env.observation_space.contains(obs)
 
 

@@ -9,10 +9,19 @@ import hydra
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig
 
-from .hydra_config import AppConfig, validate_and_convert
+from .hydra_config import AppConfig, EnvRuntimeConfig, validate_and_convert
 
 
 CONF_DIR = Path(__file__).resolve().parent / "conf"
+
+
+def _env_kwargs(env_cfg: EnvRuntimeConfig) -> dict:
+    return {
+        "obstacles": [{"x": obs.x, "y": obs.y} for obs in env_cfg.obstacles],
+        "delta_kappa": env_cfg.delta_kappa,
+        "l": list(env_cfg.l),
+        "dt": env_cfg.dt,
+    }
 
 
 def run_task(cfg: AppConfig) -> None:
@@ -33,6 +42,9 @@ def run_task(cfg: AppConfig) -> None:
             reward_function=task.reward_function,
             reward_file=task.reward_file,
             output_base_dir=Path(task.output_base_dir),
+            seed=task.seed,
+            deterministic=task.deterministic,
+            env_kwargs=_env_kwargs(cfg.env),
         )
         return
 
@@ -46,6 +58,9 @@ def run_task(cfg: AppConfig) -> None:
             goal_type=task.goal_type,
             reward_function=task.reward_function,
             max_t=task.max_t,
+            seed=task.seed,
+            deterministic=task.deterministic,
+            env_kwargs=_env_kwargs(cfg.env),
         )
         return
 
@@ -60,6 +75,9 @@ def run_task(cfg: AppConfig) -> None:
             reward_function=task.reward_function,
             reward_file=task.reward_file,
             output_base_dir=Path(task.output_base_dir),
+            seed=task.seed,
+            deterministic=task.deterministic,
+            env_kwargs=_env_kwargs(cfg.env),
         )
         return
 
@@ -72,6 +90,9 @@ def run_task(cfg: AppConfig) -> None:
             goal_type=task.goal_type,
             reward_function=task.reward_function,
             max_steps=task.max_steps,
+            seed=task.seed,
+            deterministic=task.deterministic,
+            env_kwargs=_env_kwargs(cfg.env),
         )
         return
 

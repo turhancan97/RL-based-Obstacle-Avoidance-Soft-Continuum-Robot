@@ -3,6 +3,17 @@ defaults:
   - _self_
 
 observation_mode: canonical
+env:
+  delta_kappa: 0.001
+  l: [0.1, 0.1, 0.1]
+  dt: 5e-2
+  obstacles:
+    - x: -0.16
+      y: 0.22
+    - x: -0.22
+      y: 0.02
+    - x: -0.16
+      y: 0.08
 
 hydra:
   job:
