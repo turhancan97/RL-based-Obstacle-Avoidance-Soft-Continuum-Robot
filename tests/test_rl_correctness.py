@@ -81,6 +81,25 @@ def test_keras_train_uses_done_mask_in_td_target():
     assert "(1.0 - done_batch)" in source
 
 
+def test_pytorch_train_logs_collision_metrics():
+    from Pytorch import ddpg as pytorch_ddpg
+
+    source = inspect.getsource(pytorch_ddpg.train)
+    assert "train/collision" in source
+    assert "train/collision_count" in source
+    assert "train/min_clearance_episode" in source
+
+
+def test_keras_train_logs_collision_metrics():
+    pytest.importorskip("tensorflow")
+    from Keras import DDPG as keras_ddpg
+
+    source = inspect.getsource(keras_ddpg.train)
+    assert "train/collision" in source
+    assert "train/collision_count" in source
+    assert "train/min_clearance_episode" in source
+
+
 def test_pytorch_train_uses_terminated_for_backup(monkeypatch):
     from Pytorch import ddpg as pytorch_ddpg
 

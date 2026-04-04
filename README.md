@@ -15,6 +15,13 @@ For the base (non-obstacle-avoidance) project, see:
   - Actor: MLP `128 -> 128 -> action(tanh)`
   - Critic: concat(state, action) -> MLP `128 -> 128 -> Q`
 - Default obstacle count is 3 static obstacles.
+- Obstacles support optional per-obstacle `radius`; fallback uses `env.obstacle_radius_default`.
+- Collision is a real failure event (`terminated=True`), with configurable detection mode:
+  - `env.collision_mode=body` (default, geometry/body-sampled)
+  - `env.collision_mode=tip` (legacy-like tip-only check)
+- Safety shaping is additive across all reward modes:
+  - continuous clearance penalty (`env.clearance_penalty_weight`)
+  - terminal collision penalty (`env.collision_penalty`)
 - Supported goal modes: `fixed_goal`, `random_goal`.
 - Checkpoints must include matching metadata (`state_dim`, `obs_schema`, etc.); older checkpoints are intentionally incompatible.
 
@@ -176,6 +183,8 @@ continuum-rl task=gradio_demo \
   task.device=cpu
 ```
 
+Gradio also exposes safety controls (`collision_mode`, obstacle radius/margin, penalties, body sampling) in the UI.
+
 Compatibility wrapper (deprecated):
 
 ```bash
@@ -207,6 +216,13 @@ continuum-rl task=pytorch_train task.episodes=10 task.max_t=100
 continuum-rl task=keras_train task.episodes=10 task.max_steps=100
 ```
 
+Checkpoint save frequency (local model writes during training):
+
+```bash
+continuum-rl task=pytorch_train task.checkpoint_interval_episodes=25
+continuum-rl task=keras_train task.checkpoint_interval_episodes=25
+```
+
 Reproducible and deterministic execution:
 
 ```bash
@@ -221,12 +237,28 @@ continuum-rl task=pytorch_train task.output_base_dir=runs/pytorch
 continuum-rl task=keras_train task.output_base_dir=runs/keras
 ```
 
+Environment safety overrides:
+
+```bash
+continuum-rl task=pytorch_train \
+  env.collision_mode=body \
+  env.obstacle_radius_default=0.02 \
+  env.safety_margin=0.005 \
+  env.collision_penalty=5.0 \
+  env.clearance_penalty_weight=0.5 \
+  env.body_collision_samples_per_section=25 \
+  "env.obstacles=[{x:-0.16,y:0.22,radius:0.02},{x:-0.22,y:0.02},{x:-0.16,y:0.08}]"
+```
+
 ## Artifacts
 
 ### PyTorch
 
 - model: `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/model/`
 - rewards: `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/rewards/`
+- run manifests (written at train start):  
+  `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/run_config_<timestamp>.json`  
+  `runs/pytorch/<goal_type>/<reward_file>/seed_<seed_id>/run_config_<timestamp>.txt`
 - files:
   - `checkpoint_actor.pth`
   - `checkpoint_critic.pth`
@@ -238,6 +270,9 @@ continuum-rl task=keras_train task.output_base_dir=runs/keras
 
 - model: `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/model/`
 - rewards: `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/rewards/`
+- run manifests (written at train start):  
+  `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/run_config_<timestamp>.json`  
+  `runs/keras/<goal_type>/<reward_file>/seed_<seed_id>/run_config_<timestamp>.txt`
 - files:
   - `continuum_actor.weights.h5`
   - `continuum_critic.weights.h5`
@@ -250,8 +285,9 @@ continuum-rl task=keras_train task.output_base_dir=runs/keras
 ## Training/Eval Semantics
 
 - TD terminal masking uses only true termination (`terminated=True`), not time-limit truncation.
-- Success counters track true goal-reaching terminations only.
+- Success counters track true goal-reaching terminations only (collisions are failures, not successes).
 - Truncation counts are reported separately.
+- Collision and minimum-clearance metrics are reported in train/eval logs and W&B when enabled.
 
 ## Deprecated Compatibility Commands
 

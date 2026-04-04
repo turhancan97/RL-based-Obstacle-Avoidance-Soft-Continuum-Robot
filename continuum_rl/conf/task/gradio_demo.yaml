@@ -20,3 +20,9 @@ server_name: 127.0.0.1
 server_port: 7860
 single_run_lock: true
 show_progress: true
+collision_mode: tip # body | tip
+obstacle_radius_default: 0.02
+safety_margin: 0.005
+collision_penalty: 5.0
+clearance_penalty_weight: 0.5
+body_collision_samples_per_section: 25

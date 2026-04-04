@@ -18,10 +18,23 @@ CONF_DIR = Path(__file__).resolve().parent / "conf"
 
 def _env_kwargs(env_cfg: EnvRuntimeConfig) -> dict:
     return {
-        "obstacles": [{"x": obs.x, "y": obs.y} for obs in env_cfg.obstacles],
+        "obstacles": [
+            (
+                {"x": obs.x, "y": obs.y}
+                if obs.radius is None
+                else {"x": obs.x, "y": obs.y, "radius": obs.radius}
+            )
+            for obs in env_cfg.obstacles
+        ],
         "delta_kappa": env_cfg.delta_kappa,
         "l": list(env_cfg.l),
         "dt": env_cfg.dt,
+        "collision_mode": env_cfg.collision_mode,
+        "obstacle_radius_default": env_cfg.obstacle_radius_default,
+        "safety_margin": env_cfg.safety_margin,
+        "collision_penalty": env_cfg.collision_penalty,
+        "clearance_penalty_weight": env_cfg.clearance_penalty_weight,
+        "body_collision_samples_per_section": env_cfg.body_collision_samples_per_section,
     }
 
 
@@ -46,6 +59,7 @@ def run_task(cfg: AppConfig) -> None:
             output_base_dir=Path(task.output_base_dir),
             seed=task.seed,
             deterministic=task.deterministic,
+            checkpoint_interval_episodes=task.checkpoint_interval_episodes,
             env_kwargs=_env_kwargs(cfg.env),
             wandb_cfg=asdict(cfg.wandb),
             run_config=run_config,
@@ -98,6 +112,7 @@ def run_task(cfg: AppConfig) -> None:
             output_base_dir=Path(task.output_base_dir),
             seed=task.seed,
             deterministic=task.deterministic,
+            checkpoint_interval_episodes=task.checkpoint_interval_episodes,
             env_kwargs=_env_kwargs(cfg.env),
             wandb_cfg=asdict(cfg.wandb),
             run_config=run_config,

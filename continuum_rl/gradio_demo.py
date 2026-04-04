@@ -70,6 +70,12 @@ class GradioRuntimeConfig:
     env_delta_kappa: float
     env_l: tuple[float, float, float]
     env_obstacles: tuple[dict[str, float], ...]
+    env_collision_mode: str
+    env_obstacle_radius_default: float
+    env_safety_margin: float
+    env_collision_penalty: float
+    env_clearance_penalty_weight: float
+    env_body_collision_samples_per_section: int
 
 
 @dataclass
@@ -90,7 +96,11 @@ class SimulationResult:
     final_kappa: tuple[float, float, float]
     segment_lengths: tuple[float, float, float]
     goal_xy: tuple[float, float]
-    obstacles: tuple[tuple[float, float], ...]
+    obstacles: tuple[dict[str, float], ...]
+    collided: bool
+    collision_count_episode: int
+    min_clearance: float
+    collision_threshold_min: float
     positions: np.ndarray
     kappas: np.ndarray
     rewards: np.ndarray
@@ -119,7 +129,11 @@ class SimulationResult:
             "final_kappa": list(self.final_kappa),
             "goal_xy": list(self.goal_xy),
             "segment_lengths": list(self.segment_lengths),
-            "obstacles": [list(o) for o in self.obstacles],
+            "obstacles": [dict(o) for o in self.obstacles],
+            "collided": self.collided,
+            "collision_count_episode": self.collision_count_episode,
+            "min_clearance": self.min_clearance,
+            "collision_threshold_min": self.collision_threshold_min,
             "run_dir": self.run_dir,
             "workspace_fig_path": self.workspace_fig_path,
             "diagnostics_fig_path": self.diagnostics_fig_path,
@@ -183,9 +197,15 @@ def _normalize_obstacles(raw_obstacles: Any) -> tuple[dict[str, float], ...]:
         ):
             x_vals = list(raw_obstacles["x"])
             y_vals = list(raw_obstacles["y"])
+            radius_vals = list(raw_obstacles.get("radius", [None] * len(x_vals)))
             if len(x_vals) != len(y_vals):
                 raise ValueError("obstacles column arrays must have equal length.")
-            raw_obstacles = [{"x": x_val, "y": y_val} for x_val, y_val in zip(x_vals, y_vals)]
+            if len(radius_vals) != len(x_vals):
+                raise ValueError("obstacles radius column array must match x/y length.")
+            raw_obstacles = [
+                {"x": x_val, "y": y_val, "radius": r_val}
+                for x_val, y_val, r_val in zip(x_vals, y_vals, radius_vals)
+            ]
         else:
             raw_obstacles = [raw_obstacles]
 
@@ -202,16 +222,24 @@ def _normalize_obstacles(raw_obstacles: Any) -> tuple[dict[str, float], ...]:
                 continue
             x_val = float(row["x"])
             y_val = float(row["y"])
+            radius_raw = row.get("radius", None)
         elif isinstance(row, (list, tuple)) and len(row) >= 2:
             if row[0] in (None, "") and row[1] in (None, ""):
                 continue
             x_val = float(row[0])
             y_val = float(row[1])
+            radius_raw = row[2] if len(row) >= 3 else None
         else:
             raise ValueError(f"Invalid obstacle row: {row}")
         if not np.isfinite(x_val) or not np.isfinite(y_val):
             raise ValueError("Obstacle coordinates must be finite.")
-        parsed.append({"x": x_val, "y": y_val})
+        obstacle = {"x": x_val, "y": y_val}
+        if radius_raw not in (None, ""):
+            radius_val = float(radius_raw)
+            if not np.isfinite(radius_val) or radius_val <= 0:
+                raise ValueError("Obstacle radius must be finite and > 0 when provided.")
+            obstacle["radius"] = radius_val
+        parsed.append(obstacle)
 
     if not parsed:
         raise ValueError("At least one obstacle must be provided.")
@@ -236,6 +264,18 @@ def _validate_runtime_config(cfg: GradioRuntimeConfig) -> None:
     _validate_triplet(cfg.env_l, "env_l")
     _validate_goal(cfg.fixed_goal_xy)
     _normalize_obstacles(cfg.env_obstacles)
+    if cfg.env_collision_mode not in {"body", "tip"}:
+        raise ValueError("env_collision_mode must be one of: body, tip.")
+    if cfg.env_obstacle_radius_default <= 0:
+        raise ValueError("env_obstacle_radius_default must be > 0.")
+    if cfg.env_safety_margin < 0:
+        raise ValueError("env_safety_margin must be >= 0.")
+    if cfg.env_collision_penalty < 0:
+        raise ValueError("env_collision_penalty must be >= 0.")
+    if cfg.env_clearance_penalty_weight < 0:
+        raise ValueError("env_clearance_penalty_weight must be >= 0.")
+    if cfg.env_body_collision_samples_per_section <= 1:
+        raise ValueError("env_body_collision_samples_per_section must be > 1.")
     if cfg.animation_format not in {"gif", "mp4"}:
         raise ValueError("animation_format must be gif or mp4.")
     if cfg.server_port <= 0:
@@ -375,8 +415,21 @@ def _workspace_figure(result: SimulationResult) -> plt.Figure:
         ax.plot(result.positions[:, 0], result.positions[:, 1], color="#1d4ed8", alpha=0.45, linewidth=2, label="trajectory")
 
     if result.obstacles:
-        obs = np.asarray(result.obstacles, dtype=np.float64)
-        ax.scatter(obs[:, 0], obs[:, 1], marker="x", color="red", s=80, linewidths=2.0, label="obstacles")
+        obs_x = [float(o["x"]) for o in result.obstacles]
+        obs_y = [float(o["y"]) for o in result.obstacles]
+        ax.scatter(obs_x, obs_y, marker="x", color="red", s=80, linewidths=2.0, label="obstacles")
+        for obstacle in result.obstacles:
+            radius = float(obstacle.get("radius", 0.0))
+            if radius > 0:
+                circle = plt.Circle(
+                    (float(obstacle["x"]), float(obstacle["y"])),
+                    radius,
+                    color="red",
+                    fill=False,
+                    alpha=0.35,
+                    linewidth=1.2,
+                )
+                ax.add_patch(circle)
 
     ax.scatter(result.goal_xy[0], result.goal_xy[1], marker="x", color="darkred", s=120, linewidths=2.5, label="goal")
     ax.set_title("Continuum Robot Workspace")
@@ -423,7 +476,11 @@ def _save_animation(result: SimulationResult, output_path: Path, fmt: str) -> Pa
 
     fig, ax = plt.subplots(figsize=(7.5, 7.5))
 
-    obs = np.asarray(result.obstacles, dtype=np.float64) if result.obstacles else np.zeros((0, 2), dtype=np.float64)
+    obs = (
+        np.asarray([[float(o["x"]), float(o["y"])] for o in result.obstacles], dtype=np.float64)
+        if result.obstacles
+        else np.zeros((0, 2), dtype=np.float64)
+    )
 
     def _update(frame_idx: int):
         ax.cla()
@@ -483,6 +540,12 @@ def run_simulation(
         dt=cfg.env_dt,
         delta_kappa=cfg.env_delta_kappa,
         l=cfg.env_l,
+        collision_mode=cfg.env_collision_mode,
+        obstacle_radius_default=cfg.env_obstacle_radius_default,
+        safety_margin=cfg.env_safety_margin,
+        collision_penalty=cfg.env_collision_penalty,
+        clearance_penalty_weight=cfg.env_clearance_penalty_weight,
+        body_collision_samples_per_section=cfg.env_body_collision_samples_per_section,
     )
 
     if cfg.control_mode == "policy":
@@ -521,6 +584,10 @@ def run_simulation(
     truncated = False
     cancelled = False
     total_reward = 0.0
+    collided = False
+    collision_count_episode = 0
+    min_clearance = float("inf")
+    collision_threshold_min = 0.0
 
     cancel = cancel_event or _CANCEL_EVENT
     for step_idx in range(cfg.max_steps):
@@ -536,6 +603,15 @@ def run_simulation(
         kappas.append(np.asarray(state[4:7], dtype=np.float64))
         rewards.append(float(step_out.reward))
         errors.append(float(step_out.info.get("error", np.nan)))
+        step_collided = bool(step_out.info.get("collided", False))
+        collided = bool(collided or step_collided)
+        collision_count_episode = int(step_out.info.get("collision_count_episode", collision_count_episode))
+        step_min_clearance = float(step_out.info.get("min_clearance", float("inf")))
+        if np.isfinite(step_min_clearance):
+            min_clearance = min(min_clearance, step_min_clearance)
+        collision_threshold_min = float(
+            step_out.info.get("collision_threshold_min", collision_threshold_min)
+        )
         total_reward += float(step_out.reward)
 
         if progress_cb is not None:
@@ -548,7 +624,9 @@ def run_simulation(
 
     final_kappa = tuple(float(v) for v in kappas[-1]) if kappas else initial_kappa
     status = "cancelled" if cancelled else "completed"
-    if terminated:
+    if terminated and collided:
+        status = "terminated_collision"
+    elif terminated:
         status = "terminated_success"
     elif truncated:
         status = "truncated"
@@ -570,7 +648,11 @@ def run_simulation(
         final_kappa=final_kappa,
         segment_lengths=tuple(float(v) for v in cfg.env_l),
         goal_xy=(float(state[2]), float(state[3])),
-        obstacles=tuple((float(o["x"]), float(o["y"])) for o in obstacles),
+        obstacles=tuple(dict(o) for o in obstacles),
+        collided=bool(collided),
+        collision_count_episode=int(collision_count_episode),
+        min_clearance=float(min_clearance if np.isfinite(min_clearance) else float("inf")),
+        collision_threshold_min=float(collision_threshold_min),
         positions=np.asarray(positions, dtype=np.float64),
         kappas=np.asarray(kappas, dtype=np.float64),
         rewards=np.asarray(rewards, dtype=np.float64),
@@ -643,7 +725,18 @@ def _build_runtime_config(task: Any, env_cfg: Any) -> GradioRuntimeConfig:
         env_dt=float(env_cfg.dt),
         env_delta_kappa=float(env_cfg.delta_kappa),
         env_l=tuple(float(v) for v in env_cfg.l),
-        env_obstacles=tuple({"x": float(o.x), "y": float(o.y)} for o in env_cfg.obstacles),
+        env_obstacles=tuple(
+            {"x": float(o.x), "y": float(o.y)}
+            if o.radius is None
+            else {"x": float(o.x), "y": float(o.y), "radius": float(o.radius)}
+            for o in env_cfg.obstacles
+        ),
+        env_collision_mode=str(task.collision_mode),
+        env_obstacle_radius_default=float(task.obstacle_radius_default),
+        env_safety_margin=float(task.safety_margin),
+        env_collision_penalty=float(task.collision_penalty),
+        env_clearance_penalty_weight=float(task.clearance_penalty_weight),
+        env_body_collision_samples_per_section=int(task.body_collision_samples_per_section),
     )
 
 
@@ -663,7 +756,7 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
             "Gradio is not installed. Install UI extras with `pip install -e .[ui]`."
         ) from exc
 
-    default_obstacles = [[o["x"], o["y"]] for o in cfg.env_obstacles]
+    default_obstacles = [[o["x"], o["y"], o.get("radius", None)] for o in cfg.env_obstacles]
 
     def _apply_preset(name: str):
         preset = DEFAULT_PRESETS.get(name, DEFAULT_PRESETS["default"])
@@ -673,7 +766,7 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
             float(preset["initial_kappa"][2]),
             float(preset["goal_xy"][0]),
             float(preset["goal_xy"][1]),
-            [[float(x), float(y)] for x, y in preset["obstacles"]],
+            [[float(x), float(y), None] for x, y in preset["obstacles"]],
         )
 
     def _run_ui(
@@ -701,6 +794,12 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
         output_dir: str,
         single_run_lock: bool,
         show_progress: bool,
+        collision_mode: str,
+        obstacle_radius_default: float,
+        safety_margin: float,
+        collision_penalty: float,
+        clearance_penalty_weight: float,
+        body_collision_samples_per_section: int,
         progress=gr.Progress(),
     ):
         if single_run_lock and not _RUN_LOCK.acquire(blocking=False):
@@ -740,6 +839,12 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
                 env_delta_kappa=cfg.env_delta_kappa,
                 env_l=cfg.env_l,
                 env_obstacles=cfg.env_obstacles,
+                env_collision_mode=collision_mode,
+                env_obstacle_radius_default=float(obstacle_radius_default),
+                env_safety_margin=float(safety_margin),
+                env_collision_penalty=float(collision_penalty),
+                env_clearance_penalty_weight=float(clearance_penalty_weight),
+                env_body_collision_samples_per_section=int(body_collision_samples_per_section),
             )
             _validate_runtime_config(runtime)
 
@@ -769,7 +874,8 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
             status = (
                 f"status={result.status}, framework={result.framework}, control={result.control_mode}, "
                 f"device={result.device_used}, steps={result.steps}, reward={result.total_reward:.4f}, "
-                f"error={result.final_error:.6f}"
+                f"error={result.final_error:.6f}, collided={int(result.collided)}, "
+                f"min_clearance={result.min_clearance:.6f}"
             )
             return status, result.summary_dict(), workspace_fig, diagnostics_fig, artifacts_path
         except Exception as exc:
@@ -835,13 +941,35 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
             manual3 = gr.Slider(-1.0, 1.0, value=cfg.manual_action[2], step=0.01, label="Manual action 3")
 
         obstacles_df = gr.Dataframe(
-            headers=["x", "y"],
-            datatype=["number", "number"],
+            headers=["x", "y", "radius"],
+            datatype=["number", "number", "number"],
             value=default_obstacles,
             row_count=(len(default_obstacles), "dynamic"),
-            col_count=(2, "fixed"),
+            col_count=(3, "fixed"),
             label="Obstacles",
         )
+
+        with gr.Row():
+            collision_mode = gr.Dropdown(["body", "tip"], value=cfg.env_collision_mode, label="Collision Mode")
+            obstacle_radius_default = gr.Number(
+                value=cfg.env_obstacle_radius_default,
+                label="Default Obstacle Radius",
+            )
+            safety_margin = gr.Number(value=cfg.env_safety_margin, label="Safety Margin")
+
+        with gr.Row():
+            collision_penalty = gr.Number(value=cfg.env_collision_penalty, label="Collision Penalty")
+            clearance_penalty_weight = gr.Number(
+                value=cfg.env_clearance_penalty_weight,
+                label="Clearance Penalty Weight",
+            )
+            body_collision_samples_per_section = gr.Slider(
+                minimum=2,
+                maximum=100,
+                value=cfg.env_body_collision_samples_per_section,
+                step=1,
+                label="Body Samples/Section",
+            )
 
         with gr.Row():
             save_outputs = gr.Checkbox(value=cfg.save_outputs, label="Save Outputs")
@@ -895,6 +1023,12 @@ def launch_gradio_demo(task: Any, env_cfg: Any) -> None:
                 output_dir,
                 single_run_lock,
                 show_progress,
+                collision_mode,
+                obstacle_radius_default,
+                safety_margin,
+                collision_penalty,
+                clearance_penalty_weight,
+                body_collision_samples_per_section,
             ],
             outputs=[status_box, summary_json, workspace_plot, diagnostics_plot, artifact_path],
         )

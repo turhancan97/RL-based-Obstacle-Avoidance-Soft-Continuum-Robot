@@ -47,11 +47,27 @@ def main() -> None:
     env = ContinuumEnv(observation_mode="canonical", goal_type=config["goal_type"])
     agent = Agent(state_size=env.obs_size, action_size=3, random_seed=10)
 
-    checkpoint_actor = Path(
-        f"Pytorch/{config['goal_type']}/{config['reward']['file']}/model/checkpoint_actor.pth"
+    repo_root = Path(__file__).resolve().parents[1]
+    seed_dir = "seed_0"
+    checkpoint_actor = (
+        repo_root
+        / "runs"
+        / "pytorch"
+        / config["goal_type"]
+        / config["reward"]["file"]
+        / seed_dir
+        / "model"
+        / "checkpoint_actor.pth"
     )
-    checkpoint_critic = Path(
-        f"Pytorch/{config['goal_type']}/{config['reward']['file']}/model/checkpoint_critic.pth"
+    checkpoint_critic = (
+        repo_root
+        / "runs"
+        / "pytorch"
+        / config["goal_type"]
+        / config["reward"]["file"]
+        / seed_dir
+        / "model"
+        / "checkpoint_critic.pth"
     )
     expected = {
         "state_dim": env.obs_size,

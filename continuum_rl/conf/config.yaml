@@ -9,6 +9,12 @@ env:
   delta_kappa: 0.001
   l: [0.1, 0.1, 0.1]
   dt: 5e-2
+  collision_mode: tip # body | tip
+  obstacle_radius_default: 0.02
+  safety_margin: 0.005
+  collision_penalty: 5.0
+  clearance_penalty_weight: 0.5
+  body_collision_samples_per_section: 25
   obstacles:
     - x: -0.16
       y: 0.22

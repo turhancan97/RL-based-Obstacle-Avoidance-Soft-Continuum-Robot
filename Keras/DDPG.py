@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pickle
 import random
 import time
 import warnings
+from datetime import datetime
 from pathlib import Path
+from pprint import pformat
 from typing import Any, Optional
 
 import h5py
@@ -323,6 +326,19 @@ def _save_weights(
     }
 
 
+def _write_run_manifest_files(run_dir: Path, payload: dict[str, Any]) -> dict[str, Path]:
+    ensure_dir(run_dir)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    json_path = run_dir / f"run_config_{timestamp}.json"
+    txt_path = run_dir / f"run_config_{timestamp}.txt"
+    json_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str),
+        encoding="utf-8",
+    )
+    txt_path.write_text(pformat(payload, sort_dicts=True, width=120), encoding="utf-8")
+    return {"json": json_path, "txt": txt_path}
+
+
 def _run_eval_rollout(
     actor_model: tf.keras.Model,
     goal_type: str,
@@ -346,6 +362,8 @@ def _run_eval_rollout(
     episode_length = 0
     success = 0
     truncated = 0
+    collision = 0
+    min_clearance = float("inf")
     noise = OUActionNoise(mean=np.zeros(num_actions), std_deviation=float(0.3) * np.ones(num_actions))
     for step in range(max_steps):
         tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
@@ -361,9 +379,15 @@ def _run_eval_rollout(
         state = step_out.obs
         total_reward += step_out.reward
         episode_length = step + 1
+        step_min_clearance = float(step_out.info.get("min_clearance", float("inf")))
+        if np.isfinite(step_min_clearance):
+            min_clearance = min(min_clearance, step_min_clearance)
+        step_collided = bool(step_out.info.get("collided", False))
         if step_out.terminated or step_out.truncated:
-            if step_out.terminated:
+            if step_out.terminated and not step_collided:
                 success = 1
+            if step_collided:
+                collision = 1
             elif step_out.truncated:
                 truncated = 1
             break
@@ -372,6 +396,8 @@ def _run_eval_rollout(
         "eval/mean_return": float(total_reward),
         "eval/success_rate": float(success),
         "eval/truncation_rate": float(truncated),
+        "eval/collision_rate": float(collision),
+        "eval/min_clearance_mean": float(min_clearance if np.isfinite(min_clearance) else np.nan),
         "eval/mean_episode_length": float(episode_length),
     }
 
@@ -384,6 +410,16 @@ def _env_runtime_metadata(env: Any) -> dict[str, Any]:
         "env_delta_kappa": getattr(env, "delta_kappa", None),
         "env_l": list(getattr(env, "l", [])),
         "env_obstacles": list(getattr(env, "obstacles", [])),
+        "env_collision_mode": getattr(getattr(env, "config", None), "collision_mode", None),
+        "env_obstacle_radius_default": getattr(getattr(env, "config", None), "obstacle_radius_default", None),
+        "env_safety_margin": getattr(getattr(env, "config", None), "safety_margin", None),
+        "env_collision_penalty": getattr(getattr(env, "config", None), "collision_penalty", None),
+        "env_clearance_penalty_weight": getattr(
+            getattr(env, "config", None), "clearance_penalty_weight", None
+        ),
+        "env_body_collision_samples_per_section": getattr(
+            getattr(env, "config", None), "body_collision_samples_per_section", None
+        ),
     }
 
 
@@ -396,6 +432,7 @@ def train(
     output_base_dir: Path | str | None = None,
     seed: int | None = None,
     deterministic: bool = False,
+    checkpoint_interval_episodes: int = 100,
     env_kwargs: dict[str, Any] | None = None,
     wandb_cfg: dict[str, Any] | None = None,
     run_config: dict[str, Any] | None = None,
@@ -411,6 +448,8 @@ def train(
     noise_theta: float = 0.15,
     noise_dt: float = 1.0,
 ) -> list[float]:
+    if checkpoint_interval_episodes <= 0:
+        raise ValueError("checkpoint_interval_episodes must be greater than 0.")
     _configure_runtime(seed=seed, deterministic=deterministic)
     start_time = time.time()
     resolved_reward_file = _resolve_reward_file(reward_function=reward_function, reward_file=reward_file)
@@ -444,6 +483,7 @@ def train(
             "noise_std": noise_std,
             "noise_theta": noise_theta,
             "noise_dt": noise_dt,
+            "checkpoint_interval_episodes": checkpoint_interval_episodes,
             "health_alerts_enabled": bool(wandb_settings.get("health_alerts_enabled", True)),
             "health_ema_alpha": float(wandb_settings.get("health_ema_alpha", 0.01)),
             "health_warmup_steps": int(wandb_settings.get("health_warmup_steps", 2000)),
@@ -453,6 +493,31 @@ def train(
             "health_grad_norm_max": float(wandb_settings.get("health_grad_norm_max", 20.0)),
             **_env_runtime_metadata(env),
         }
+    )
+    run_dir = output_dir / goal_type / resolved_reward_file / seed_dir
+    manifest_payload = {
+        "created_at": datetime.now().isoformat(),
+        "framework": "keras",
+        "task_name": task_name,
+        "resolved": {
+            "goal_type": goal_type,
+            "reward_function": reward_function,
+            "reward_file": reward_file,
+            "reward_file_resolved": resolved_reward_file,
+            "output_base_dir": str(output_dir),
+            "run_dir": str(run_dir),
+            "seed": seed,
+            "seed_dir": seed_dir,
+            "episodes": total_episodes,
+            "max_steps": max_steps,
+            "checkpoint_interval_episodes": checkpoint_interval_episodes,
+        },
+        "run_config": tracker_run_config,
+    }
+    manifest_paths = _write_run_manifest_files(run_dir=run_dir, payload=manifest_payload)
+    print(
+        "Saved run manifests: "
+        f"{manifest_paths['json']} and {manifest_paths['txt']}"
     )
     tracker = create_wandb_tracker(
         wandb_cfg=wandb_cfg,
@@ -535,6 +600,7 @@ def train(
     avg_reward_list: list[float] = []
     success_counter = 0
     truncation_counter = 0
+    collision_counter = 0
     global_step = 0
     noise = OUActionNoise(
         mean=np.zeros(num_actions),
@@ -551,6 +617,9 @@ def train(
             episode_steps = 0
             episode_success = 0
             episode_truncated = 0
+            episode_collision = 0
+            episode_collision_count = 0
+            episode_min_clearance = float("inf")
 
             if ep % 50 == 0:
                 print("Episode Number", ep)
@@ -574,6 +643,15 @@ def train(
                 episode_done = step_out.terminated or step_out.truncated
                 terminal_for_backup = float(step_out.terminated)
                 episode_steps = step + 1
+                step_collided = bool(step_out.info.get("collided", False))
+                if step_collided:
+                    episode_collision = 1
+                episode_collision_count = int(
+                    step_out.info.get("collision_count_episode", episode_collision_count)
+                )
+                step_min_clearance = float(step_out.info.get("min_clearance", float("inf")))
+                if np.isfinite(step_min_clearance):
+                    episode_min_clearance = min(episode_min_clearance, step_min_clearance)
 
                 buffer.record((prev_state, action, reward, state, terminal_for_backup))
                 batch = buffer.sample()
@@ -606,9 +684,11 @@ def train(
                 episodic_reward += reward
                 prev_state = state
                 if episode_done:
-                    if step_out.terminated:
+                    if step_out.terminated and not step_collided:
                         success_counter += 1
                         episode_success = 1
+                    elif step_collided:
+                        collision_counter += 1
                     elif step_out.truncated:
                         truncation_counter += 1
                         episode_truncated = 1
@@ -631,6 +711,11 @@ def train(
                         "train/error_final": float(env.error),
                         "train/overshoot0_total": float(env.overshoot0),
                         "train/overshoot1_total": float(env.overshoot1),
+                        "train/collision": float(episode_collision),
+                        "train/collision_count": float(episode_collision_count),
+                        "train/min_clearance_episode": float(
+                            episode_min_clearance if np.isfinite(episode_min_clearance) else np.nan
+                        ),
                     },
                     step=global_step,
                 )
@@ -647,19 +732,21 @@ def train(
                     eval_metrics["eval/episode_index"] = float(ep + 1)
                     tracker.log_metrics(eval_metrics, step=global_step)
 
-                if upload_checkpoints and (ep + 1) % artifact_interval == 0:
-                    saved_paths = _save_weights(
-                        actor_model=actor_model,
-                        critic_model=critic_model,
-                        target_actor=target_actor,
-                        target_critic=target_critic,
-                        env=env,
-                        goal_type=goal_type,
-                        reward_file=resolved_reward_file,
-                        reward_function=reward_function,
-                        output_base_dir=output_dir,
-                        seed_dir=seed_dir,
-                    )
+            if (ep + 1) % int(checkpoint_interval_episodes) == 0:
+                saved_paths = _save_weights(
+                    actor_model=actor_model,
+                    critic_model=critic_model,
+                    target_actor=target_actor,
+                    target_critic=target_critic,
+                    env=env,
+                    goal_type=goal_type,
+                    reward_file=resolved_reward_file,
+                    reward_function=reward_function,
+                    output_base_dir=output_dir,
+                    seed_dir=seed_dir,
+                )
+                # print(f"Saved periodic checkpoints at episode {ep + 1}: {saved_paths['actor']}")
+                if tracker.active and upload_checkpoints and (ep + 1) % artifact_interval == 0:
                     tracker.log_artifact_files(
                         name=f"keras-{goal_type}-{resolved_reward_file}",
                         artifact_type="model",
@@ -669,6 +756,7 @@ def train(
                     )
 
         print(f"{success_counter} episodes reached the target point in total {total_episodes} episodes")
+        print(f"{collision_counter} episodes ended by obstacle collision")
         print(f"{truncation_counter} episodes ended by time-limit truncation")
         end_time = time.time() - start_time
         print("Total Overshoot 0: ", env.overshoot0)
@@ -766,6 +854,8 @@ def evaluate_smoke(
     total_reward = 0.0
     success_counter = 0
     truncation_counter = 0
+    collision_counter = 0
+    min_clearance = float("inf")
     for _ in range(max_steps):
         tf_prev_state = tf.expand_dims(tf.convert_to_tensor(state), 0)
         action = _policy_impl(
@@ -779,16 +869,23 @@ def evaluate_smoke(
         step_out = unpack_step_output(env.step(action, reward_function=reward_function))
         state = step_out.obs
         total_reward += step_out.reward
+        step_collided = bool(step_out.info.get("collided", False))
+        step_min_clearance = float(step_out.info.get("min_clearance", float("inf")))
+        if np.isfinite(step_min_clearance):
+            min_clearance = min(min_clearance, step_min_clearance)
         if step_out.terminated or step_out.truncated:
-            if step_out.terminated:
+            if step_out.terminated and not step_collided:
                 success_counter += 1
+            elif step_collided:
+                collision_counter += 1
             elif step_out.truncated:
                 truncation_counter += 1
             break
 
     print(
         "Keras smoke eval finished, "
-        f"total_reward={total_reward:.3f}, successes={success_counter}, truncations={truncation_counter}"
+        f"total_reward={total_reward:.3f}, successes={success_counter}, "
+        f"collisions={collision_counter}, truncations={truncation_counter}"
     )
     try:
         if tracker.active:
@@ -797,6 +894,8 @@ def evaluate_smoke(
                     "eval/mean_return": float(total_reward),
                     "eval/success_rate": float(success_counter),
                     "eval/truncation_rate": float(truncation_counter),
+                    "eval/collision_rate": float(collision_counter),
+                    "eval/min_clearance_mean": float(min_clearance if np.isfinite(min_clearance) else np.nan),
                 },
                 step=1,
             )
@@ -855,6 +954,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reward-file", default=None)
     parser.add_argument("--checkpoint-actor", type=Path, default=None)
     parser.add_argument("--output-base-dir", type=Path, default=DEFAULT_OUTPUT_BASE_DIR)
+    parser.add_argument("--checkpoint-interval-episodes", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--deterministic", action="store_true")
     return parser.parse_args()
@@ -882,6 +982,7 @@ def main() -> None:
             reward_function=args.reward_function,
             reward_file=args.reward_file,
             output_base_dir=args.output_base_dir,
+            checkpoint_interval_episodes=args.checkpoint_interval_episodes,
             seed=args.seed,
             deterministic=args.deterministic,
         )

@@ -26,12 +26,19 @@ def test_hydra_compose_all_tasks():
         assert list(cfg.env.l) == [0.1, 0.1, 0.1]
         assert cfg.env.dt == 5e-2
         assert len(cfg.env.obstacles) == 3
+        assert cfg.env.collision_mode in {"body", "tip"}
+        assert cfg.env.obstacle_radius_default > 0
+        assert cfg.env.safety_margin >= 0
+        assert cfg.env.collision_penalty >= 0
+        assert cfg.env.clearance_penalty_weight >= 0
+        assert cfg.env.body_collision_samples_per_section > 1
         assert isinstance(cfg.wandb.enabled, bool)
         assert cfg.wandb.mode in {"offline", "online"}
         if task in {"pytorch_train", "keras_train"}:
             assert cfg.task.reward_file == f"reward_{cfg.task.reward_function}"
             assert cfg.task.gamma == 0.99
             assert cfg.task.tau == 0.0005
+            assert cfg.task.checkpoint_interval_episodes > 0
         if task == "paper_figures":
             assert cfg.task.format == "jpeg"
             assert cfg.task.ci_method == "bootstrap"
@@ -40,6 +47,8 @@ def test_hydra_compose_all_tasks():
             assert cfg.task.framework in {"pytorch", "keras"}
             assert cfg.task.control_mode in {"policy", "manual"}
             assert cfg.task.device in {"auto", "cpu", "gpu"}
+            assert cfg.task.collision_mode in {"body", "tip"}
+            assert cfg.task.obstacle_radius_default > 0
 
 
 def test_hydra_paper_figures_override_smoke():
@@ -123,6 +132,7 @@ def test_hydra_train_hyperparameter_overrides_smoke():
             "task.actor_lr=0.0002",
             "task.critic_lr=0.0008",
             "task.noise_std=0.25",
+            "task.checkpoint_interval_episodes=7",
         ]
     )
     assert cfg.task.batch_size == 128
@@ -131,6 +141,7 @@ def test_hydra_train_hyperparameter_overrides_smoke():
     assert cfg.task.actor_lr == 0.0002
     assert cfg.task.critic_lr == 0.0008
     assert cfg.task.noise_std == 0.25
+    assert cfg.task.checkpoint_interval_episodes == 7
 
 
 def test_hydra_wandb_overrides_smoke():
@@ -181,7 +192,13 @@ def test_hydra_env_overrides_smoke():
             "env.delta_kappa=0.002",
             "env.dt=0.01",
             "env.l=[0.12,0.11,0.09]",
-            "env.obstacles=[{x:-0.1,y:0.2},{x:-0.2,y:0.1}]",
+            "env.obstacles=[{x:-0.1,y:0.2,radius:0.03},{x:-0.2,y:0.1}]",
+            "env.collision_mode=tip",
+            "env.obstacle_radius_default=0.015",
+            "env.safety_margin=0.004",
+            "env.collision_penalty=8.0",
+            "env.clearance_penalty_weight=1.2",
+            "env.body_collision_samples_per_section=31",
         ]
     )
     assert cfg.env.delta_kappa == 0.002
@@ -190,6 +207,14 @@ def test_hydra_env_overrides_smoke():
     assert len(cfg.env.obstacles) == 2
     assert cfg.env.obstacles[0].x == -0.1
     assert cfg.env.obstacles[0].y == 0.2
+    assert cfg.env.obstacles[0].radius == 0.03
+    assert cfg.env.obstacles[1].radius is None
+    assert cfg.env.collision_mode == "tip"
+    assert cfg.env.obstacle_radius_default == 0.015
+    assert cfg.env.safety_margin == 0.004
+    assert cfg.env.collision_penalty == 8.0
+    assert cfg.env.clearance_penalty_weight == 1.2
+    assert cfg.env.body_collision_samples_per_section == 31
 
 
 def test_observation_mode_is_canonical_only():
@@ -200,3 +225,8 @@ def test_observation_mode_is_canonical_only():
 def test_wandb_invalid_mode_rejected():
     with pytest.raises(Exception):
         compose_config(["wandb.mode=disabled"])
+
+
+def test_env_invalid_collision_mode_rejected():
+    with pytest.raises(Exception):
+        compose_config(["env.collision_mode=invalid"])

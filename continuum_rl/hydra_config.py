@@ -17,6 +17,7 @@ TaskName = str
 class ObstacleConfig:
     x: float
     y: float
+    radius: Optional[float] = None
 
 
 @dataclass
@@ -31,6 +32,12 @@ class EnvRuntimeConfig:
             ObstacleConfig(x=-0.16, y=0.08),
         )
     )
+    collision_mode: str = "body"
+    obstacle_radius_default: float = 0.02
+    safety_margin: float = 0.005
+    collision_penalty: float = 5.0
+    clearance_penalty_weight: float = 0.5
+    body_collision_samples_per_section: int = 25
 
 
 @dataclass
@@ -74,6 +81,7 @@ class PytorchTrainConfig:
     output_base_dir: str = "runs/pytorch"
     seed: Optional[int] = 0
     deterministic: bool = False
+    checkpoint_interval_episodes: int = 100
     agent_seed: int = 10
     buffer_size: int = 50_000
     batch_size: int = 64
@@ -114,6 +122,7 @@ class KerasTrainConfig:
     output_base_dir: str = "runs/keras"
     seed: Optional[int] = 0
     deterministic: bool = False
+    checkpoint_interval_episodes: int = 100
     buffer_capacity: int = 50_000
     batch_size: int = 64
     gamma: float = 0.99
@@ -202,6 +211,12 @@ class GradioDemoConfig:
     server_port: int = 7860
     single_run_lock: bool = True
     show_progress: bool = True
+    collision_mode: str = "body"
+    obstacle_radius_default: float = 0.02
+    safety_margin: float = 0.005
+    collision_penalty: float = 5.0
+    clearance_penalty_weight: float = 0.5
+    body_collision_samples_per_section: int = 25
 
 
 TaskConfig = Union[
@@ -258,6 +273,21 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
         raise ValueError("env.dt must be greater than 0.")
     if len(env_cfg.l) != 3:
         raise ValueError("env.l must contain exactly 3 segment lengths.")
+    if env_cfg.collision_mode not in {"body", "tip"}:
+        raise ValueError("env.collision_mode must be one of: body, tip.")
+    if env_cfg.obstacle_radius_default <= 0:
+        raise ValueError("env.obstacle_radius_default must be > 0.")
+    if env_cfg.safety_margin < 0:
+        raise ValueError("env.safety_margin must be >= 0.")
+    if env_cfg.collision_penalty < 0:
+        raise ValueError("env.collision_penalty must be >= 0.")
+    if env_cfg.clearance_penalty_weight < 0:
+        raise ValueError("env.clearance_penalty_weight must be >= 0.")
+    if env_cfg.body_collision_samples_per_section <= 1:
+        raise ValueError("env.body_collision_samples_per_section must be > 1.")
+    for idx, obstacle in enumerate(env_cfg.obstacles):
+        if obstacle.radius is not None and obstacle.radius <= 0:
+            raise ValueError(f"env.obstacles[{idx}].radius must be > 0 when provided.")
     wandb_cfg: WandbConfig = OmegaConf.to_object(base_merged.wandb)
     if wandb_cfg.mode not in {"offline", "online"}:
         raise ValueError("wandb.mode must be either 'offline' or 'online'.")
@@ -299,6 +329,7 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
     if hasattr(task_obj, "tau") and not (0 < task_obj.tau <= 1):
         raise ValueError("task.tau must be in (0, 1].")
     for positive_key in (
+        "checkpoint_interval_episodes",
         "buffer_size",
         "buffer_capacity",
         "batch_size",
@@ -359,6 +390,18 @@ def validate_and_convert(cfg: DictConfig) -> AppConfig:
             raise ValueError("task.server_port must be > 0.")
         if task_obj.animation_format not in {"gif", "mp4"}:
             raise ValueError("task.animation_format must be one of: gif, mp4.")
+        if task_obj.collision_mode not in {"body", "tip"}:
+            raise ValueError("task.collision_mode must be one of: body, tip.")
+        if task_obj.obstacle_radius_default <= 0:
+            raise ValueError("task.obstacle_radius_default must be > 0.")
+        if task_obj.safety_margin < 0:
+            raise ValueError("task.safety_margin must be >= 0.")
+        if task_obj.collision_penalty < 0:
+            raise ValueError("task.collision_penalty must be >= 0.")
+        if task_obj.clearance_penalty_weight < 0:
+            raise ValueError("task.clearance_penalty_weight must be >= 0.")
+        if task_obj.body_collision_samples_per_section <= 1:
+            raise ValueError("task.body_collision_samples_per_section must be > 1.")
 
     return AppConfig(
         observation_mode=observation_mode,

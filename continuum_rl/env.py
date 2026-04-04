@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal, Sequence
+from typing import Iterable, Literal, Mapping, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,6 +24,8 @@ from .spaces import AmorphousSpace
 ObservationMode = Literal["canonical"]
 GoalType = Literal["fixed_goal", "random_goal"]
 OBS_SCHEMA_CANONICAL_V3 = "canonical_v3"
+DEFAULT_OBSTACLE_RADIUS = 0.02
+DEFAULT_COLLISION_MODE = "body"
 
 
 DEFAULT_OBSTACLES = (
@@ -31,6 +33,24 @@ DEFAULT_OBSTACLES = (
     {"x": -0.22, "y": 0.02},
     {"x": -0.16, "y": 0.08},
 )
+
+
+def _coerce_obstacle_dict(
+    obstacle: Mapping[str, float] | dict[str, float],
+    *,
+    obstacle_radius_default: float,
+) -> dict[str, float]:
+    if "x" not in obstacle or "y" not in obstacle:
+        raise ValueError(f"Obstacle entries must include x and y coordinates, got {obstacle}.")
+    x = float(obstacle["x"])
+    y = float(obstacle["y"])
+    radius_raw = obstacle.get("radius", obstacle_radius_default)
+    radius = float(obstacle_radius_default if radius_raw is None else radius_raw)
+    if not np.isfinite(x) or not np.isfinite(y):
+        raise ValueError(f"Obstacle coordinates must be finite, got {obstacle}.")
+    if radius <= 0:
+        raise ValueError(f"Obstacle radius must be > 0, got {radius}.")
+    return {"x": x, "y": y, "radius": radius}
 
 
 @dataclass(frozen=True)
@@ -43,6 +63,12 @@ class EnvConfig:
     l: tuple[float, float, float] = (0.1, 0.1, 0.1)  # noqa: E741
     dt: float = 5e-2
     max_episode_steps: int | None = None
+    collision_mode: Literal["body", "tip"] = DEFAULT_COLLISION_MODE
+    obstacle_radius_default: float = DEFAULT_OBSTACLE_RADIUS
+    safety_margin: float = 0.005
+    collision_penalty: float = 5.0
+    clearance_penalty_weight: float = 0.5
+    body_collision_samples_per_section: int = 25
 
 
 class ContinuumEnv(gym.Env):
@@ -60,6 +86,12 @@ class ContinuumEnv(gym.Env):
         l: Sequence[float] = (0.1, 0.1, 0.1),  # noqa: E741
         dt: float = 5e-2,
         max_episode_steps: int | None = None,
+        collision_mode: Literal["body", "tip"] = DEFAULT_COLLISION_MODE,
+        obstacle_radius_default: float = DEFAULT_OBSTACLE_RADIUS,
+        safety_margin: float = 0.005,
+        collision_penalty: float = 5.0,
+        clearance_penalty_weight: float = 0.5,
+        body_collision_samples_per_section: int = 25,
     ):
         if observation_mode != "canonical":
             raise ValueError(
@@ -76,6 +108,17 @@ class ContinuumEnv(gym.Env):
             raise ValueError("l must contain exactly 3 segment lengths.")
         if max_episode_steps is not None and max_episode_steps <= 0:
             raise ValueError("max_episode_steps must be a positive integer or None.")
+        if obstacle_radius_default <= 0:
+            raise ValueError("obstacle_radius_default must be > 0.")
+        if safety_margin < 0:
+            raise ValueError("safety_margin must be >= 0.")
+        if collision_penalty < 0:
+            raise ValueError("collision_penalty must be >= 0.")
+        if clearance_penalty_weight < 0:
+            raise ValueError("clearance_penalty_weight must be >= 0.")
+        if body_collision_samples_per_section <= 1:
+            raise ValueError("body_collision_samples_per_section must be > 1.")
+        self._validate_collision_mode(collision_mode)
         normalized_l = tuple(float(segment_length) for segment_length in l)
 
         self.config = EnvConfig(
@@ -87,6 +130,12 @@ class ContinuumEnv(gym.Env):
             l=normalized_l,
             dt=float(dt),
             max_episode_steps=max_episode_steps,
+            collision_mode=collision_mode,
+            obstacle_radius_default=float(obstacle_radius_default),
+            safety_margin=float(safety_margin),
+            collision_penalty=float(collision_penalty),
+            clearance_penalty_weight=float(clearance_penalty_weight),
+            body_collision_samples_per_section=int(body_collision_samples_per_section),
         )
 
         self.delta_kappa = self.config.delta_kappa
@@ -105,7 +154,11 @@ class ContinuumEnv(gym.Env):
         self.overshoot1 = 0
         self.stop = 0
 
-        self.obstacles = [dict(o) for o in (obstacles if obstacles is not None else DEFAULT_OBSTACLES)]
+        raw_obstacles = obstacles if obstacles is not None else DEFAULT_OBSTACLES
+        self.obstacles = [
+            _coerce_obstacle_dict(o, obstacle_radius_default=self.config.obstacle_radius_default)
+            for o in raw_obstacles
+        ]
         self.num_obstacles = len(self.obstacles)
         self.workspace = AmorphousSpace()
 
@@ -134,6 +187,10 @@ class ContinuumEnv(gym.Env):
         self.last_u = np.zeros(3, dtype=np.float32)
         self.initial_distance: float | None = None
         self.step_count = 0
+        self.collision_count_episode = 0
+        self.last_collided = False
+        self.last_min_clearance = float("inf")
+        self.last_collision_threshold_min = 0.0
 
     def _select_observation(self, full_state: np.ndarray) -> np.ndarray:
         return full_state.astype(np.float32)
@@ -271,6 +328,73 @@ class ContinuumEnv(gym.Env):
         if k1 and k2 and k3:
             self.stop = 7
 
+    @staticmethod
+    def _validate_collision_mode(collision_mode: str) -> None:
+        if collision_mode not in {"body", "tip"}:
+            raise ValueError("collision_mode must be one of: body, tip.")
+
+    def _sample_points_from_section(self, section_cc: np.ndarray) -> np.ndarray:
+        n_rows = section_cc.shape[0]
+        sample_count = max(2, int(self.config.body_collision_samples_per_section))
+        idx = np.linspace(0, n_rows - 1, sample_count).astype(np.int64)
+        return np.column_stack((section_cc[idx, 12], section_cc[idx, 13])).astype(np.float64)
+
+    def _robot_body_points(self) -> np.ndarray:
+        T1_cc = trans_mat_cc(self.kappa1, self.l[0])
+        T1_tip = np.reshape(T1_cc[len(T1_cc) - 1, :], (4, 4), order="F")
+        T2 = trans_mat_cc(self.kappa2, self.l[1])
+        T2_cc = coupletransformations(T2, T1_tip)
+        T2_tip = np.reshape(T2_cc[len(T2_cc) - 1, :], (4, 4), order="F")
+        T3 = trans_mat_cc(self.kappa3, self.l[2])
+        T3_cc = coupletransformations(T3, T2_tip)
+
+        p1 = self._sample_points_from_section(T1_cc)
+        p2 = self._sample_points_from_section(T2_cc)
+        p3 = self._sample_points_from_section(T3_cc)
+        return np.vstack((p1, p2, p3))
+
+    def _collision_points(self, tip_x: float, tip_y: float) -> np.ndarray:
+        if self.config.collision_mode == "tip":
+            return np.array([[tip_x, tip_y]], dtype=np.float64)
+        return self._robot_body_points()
+
+    def _clearance_stats(self, tip_x: float, tip_y: float) -> tuple[float, float, bool]:
+        points = self._collision_points(tip_x, tip_y)
+        if points.size == 0 or not self.obstacles:
+            return float("inf"), 0.0, False
+
+        min_gap = float("inf")
+        min_threshold = float("inf")
+        collided = False
+        for obstacle in self.obstacles:
+            center = np.asarray([obstacle["x"], obstacle["y"]], dtype=np.float64)
+            radius = float(obstacle.get("radius", self.config.obstacle_radius_default))
+            threshold = radius + self.config.safety_margin
+            distances = np.linalg.norm(points - center[None, :], axis=1)
+            local_gap = float(np.min(distances) - threshold)
+            if local_gap <= 0:
+                collided = True
+            if local_gap < min_gap:
+                min_gap = local_gap
+            if threshold < min_threshold:
+                min_threshold = threshold
+
+        return float(min_gap), float(min_threshold), bool(collided)
+
+    def _safety_penalty(self, min_clearance: float) -> float:
+        # Smooth barrier-style penalty near obstacle boundaries.
+        if self.config.clearance_penalty_weight <= 0:
+            return 0.0
+        if not np.isfinite(min_clearance):
+            return 0.0
+        if min_clearance <= 0:
+            return float(self.config.clearance_penalty_weight * (1.0 + abs(min_clearance) * 100.0))
+        safe_band = max(self.config.safety_margin * 2.0, 0.02)
+        if min_clearance >= safe_band:
+            return 0.0
+        proximity = 1.0 - (min_clearance / safe_band)
+        return float(self.config.clearance_penalty_weight * (proximity**2))
+
     def step(self, action: Sequence[float], reward_function: str = "step_minus_euclidean_square"):
         step_context = f"step(reward_function={reward_function})"
         x, y, goal_x, goal_y = self._full_state[:4]
@@ -317,15 +441,26 @@ class ContinuumEnv(gym.Env):
             new_goal_y,
             reward_function=reward_function,
         )
-        terminated, reward = self._compute_termination_reward(costs=costs, reward_function=reward_function)
+        goal_terminated, reward = self._compute_termination_reward(costs=costs, reward_function=reward_function)
+        min_clearance, collision_threshold_min, collided = self._clearance_stats(new_x, new_y)
+        safety_penalty = self._safety_penalty(min_clearance=min_clearance)
+        reward -= safety_penalty
+        if collided:
+            reward -= float(self.config.collision_penalty)
+            self.collision_count_episode += 1
+        terminated = bool(goal_terminated or collided)
         self.previous_error = self.error
         self.last_u = control
         self.step_count += 1
+        self.last_collided = bool(collided)
+        self.last_min_clearance = float(min_clearance)
+        self.last_collision_threshold_min = float(collision_threshold_min)
 
         obs = self._select_observation(self._full_state)
         truncated = bool(
             self.config.max_episode_steps is not None
             and self.step_count >= self.config.max_episode_steps
+            and not terminated
         )
         info = {
             "error": float(self.error),
@@ -334,6 +469,13 @@ class ContinuumEnv(gym.Env):
             "observation_schema": self.obs_schema,
             "goal_type": self.config.goal_type,
             "step_count": self.step_count,
+            "goal_terminated": bool(goal_terminated),
+            "collided": bool(collided),
+            "min_clearance": float(min_clearance),
+            "collision_mode": self.config.collision_mode,
+            "collision_threshold_min": float(collision_threshold_min),
+            "collision_count_episode": int(self.collision_count_episode),
+            "safety_penalty": float(safety_penalty),
         }
         return obs, float(reward), terminated, truncated, info
 
@@ -389,6 +531,10 @@ class ContinuumEnv(gym.Env):
         self.workspace.set_rng(self.np_random)
         self.initial_distance = None
         self.step_count = 0
+        self.collision_count_episode = 0
+        self.last_collided = False
+        self.last_min_clearance = float("inf")
+        self.last_collision_threshold_min = 0.0
 
         initial_kappa_override = self._parse_initial_kappa_override(options)
         if initial_kappa_override is None:
@@ -424,6 +570,11 @@ class ContinuumEnv(gym.Env):
             "observation_mode": self.config.observation_mode,
             "observation_schema": self.obs_schema,
             "goal_type": self.config.goal_type,
+            "collided": False,
+            "min_clearance": float("inf"),
+            "collision_mode": self.config.collision_mode,
+            "collision_threshold_min": 0.0,
+            "collision_count_episode": 0,
         }
         return obs, info
 

@@ -4,12 +4,13 @@ reward_function: step_minus_weighted_euclidean
 # reward function options: step_error_comparison | step_minus_euclidean_square | step_minus_weighted_euclidean | step_distance_based
 reward_file: null
 # optional custom output folder name; default auto-derives to reward_<reward_function>
-episodes: 300
-max_t: 750
+episodes: 3000
+max_t: 1000
 print_every: 25
 output_base_dir: runs/pytorch
 seed: 0
 deterministic: false
+checkpoint_interval_episodes: 10
 agent_seed: 10
 buffer_size: 50000
 batch_size: 64

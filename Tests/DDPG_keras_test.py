@@ -50,8 +50,17 @@ def main() -> None:
     env.start_kappa = [env.kappa1, env.kappa2, env.kappa3]
     env.render_init()
 
-    checkpoint_actor = Path(
-        f"Keras/{config['goal_type']}/{config['reward']['file']}/model/continuum_actor.h5"
+    repo_root = Path(__file__).resolve().parents[1]
+    seed_dir = "seed_0"
+    checkpoint_actor = (
+        repo_root
+        / "runs"
+        / "keras"
+        / config["goal_type"]
+        / config["reward"]["file"]
+        / seed_dir
+        / "model"
+        / "continuum_actor.weights.h5"
     )
     expected = {
         "state_dim": env.obs_size,
@@ -63,7 +72,7 @@ def main() -> None:
 
     resolved_actor = checkpoint_actor
     if not resolved_actor.exists():
-        alt = checkpoint_actor.with_name(checkpoint_actor.stem + ".weights.h5")
+        alt = checkpoint_actor.with_name("continuum_actor.h5")
         if alt.exists():
             resolved_actor = alt
         else:

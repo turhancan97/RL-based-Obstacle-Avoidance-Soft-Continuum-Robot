@@ -40,10 +40,16 @@ def _manual_cfg() -> GradioRuntimeConfig:
         env_delta_kappa=0.001,
         env_l=(0.1, 0.1, 0.1),
         env_obstacles=(
-            {"x": -0.16, "y": 0.22},
+            {"x": -0.16, "y": 0.22, "radius": 0.02},
             {"x": -0.22, "y": 0.02},
             {"x": -0.16, "y": 0.08},
         ),
+        env_collision_mode="body",
+        env_obstacle_radius_default=0.02,
+        env_safety_margin=0.005,
+        env_collision_penalty=5.0,
+        env_clearance_penalty_weight=0.5,
+        env_body_collision_samples_per_section=25,
     )
 
 
@@ -89,15 +95,27 @@ def test_persist_result_writes_expected_files(tmp_path):
 
 
 def test_normalize_obstacles_accepts_dict_of_columns():
-    obstacles = _normalize_obstacles({"x": [-0.1, -0.2], "y": [0.1, 0.2]})
+    obstacles = _normalize_obstacles({"x": [-0.1, -0.2], "y": [0.1, 0.2], "radius": [0.03, None]})
     assert len(obstacles) == 2
     assert obstacles[0]["x"] == -0.1
     assert obstacles[1]["y"] == 0.2
+    assert obstacles[0]["radius"] == 0.03
+    assert "radius" not in obstacles[1]
 
 
 def test_normalize_obstacles_accepts_numpy_table():
-    raw = np.array([[-0.1, 0.1], [-0.2, 0.2]], dtype=np.float64)
+    raw = np.array([[-0.1, 0.1, 0.02], [-0.2, 0.2, 0.03]], dtype=np.float64)
     obstacles = _normalize_obstacles(raw)
     assert len(obstacles) == 2
     assert obstacles[0]["x"] == -0.1
     assert obstacles[1]["y"] == 0.2
+    assert obstacles[0]["radius"] == 0.02
+
+
+def test_simulation_summary_contains_collision_fields():
+    cfg = _manual_cfg()
+    result = run_simulation(cfg, initial_kappa_override=(0.0, 0.0, 0.0))
+    summary = result.summary_dict()
+    assert "collided" in summary
+    assert "collision_count_episode" in summary
+    assert "min_clearance" in summary

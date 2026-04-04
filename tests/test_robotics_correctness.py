@@ -117,3 +117,40 @@ def test_max_episode_steps_sets_truncated_flag():
     assert terminated_2 is False
     assert truncated_2 is True
     assert env.step_count == 2
+
+
+def test_clearance_penalty_applies_to_all_reward_modes():
+    reward_modes = [
+        "step_error_comparison",
+        "step_minus_euclidean_square",
+        "step_minus_weighted_euclidean",
+        "step_distance_based",
+    ]
+    for reward_mode in reward_modes:
+        env_near = ContinuumEnv(
+            observation_mode="canonical",
+            goal_type="fixed_goal",
+            obstacles=[{"x": 0.0, "y": 0.285, "radius": 0.002}],
+            obstacle_radius_default=0.002,
+            safety_margin=0.0,
+            clearance_penalty_weight=1.0,
+            collision_penalty=0.0,
+            collision_mode="tip",
+        )
+        env_far = ContinuumEnv(
+            observation_mode="canonical",
+            goal_type="fixed_goal",
+            obstacles=[{"x": 0.3, "y": -0.3, "radius": 0.002}],
+            obstacle_radius_default=0.002,
+            safety_margin=0.0,
+            clearance_penalty_weight=1.0,
+            collision_penalty=0.0,
+            collision_mode="tip",
+        )
+
+        reset_options = {"initial_kappa": [0.0, 0.0, 0.0], "goal_xy": [-0.2, 0.1]}
+        env_near.reset(seed=42, options=reset_options)
+        env_far.reset(seed=42, options=reset_options)
+        _, reward_near, _, _, _ = env_near.step(np.zeros(3, dtype=np.float32), reward_function=reward_mode)
+        _, reward_far, _, _, _ = env_far.step(np.zeros(3, dtype=np.float32), reward_function=reward_mode)
+        assert reward_near < reward_far, f"Expected stronger penalty near obstacle for mode={reward_mode}"
